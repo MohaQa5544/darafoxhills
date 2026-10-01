@@ -267,10 +267,19 @@ function toast(msg){ const t = $('#toast'); t.textContent = msg; t.classList.add
 /* =====================================================================
    الاحتساب
    - أيام الدوام = الأحد–الخميس بعد استبعاد العطل الرسمية؛ الجمعة والسبت لا تُحتسب غياباً أبداً.
-   - أيام الغياب = أيام الدوام المسجّلة «غائب» فقط (بلا إضافة الجمعة والسبت).
+   - أيام الغياب = أيام الدوام المسجّلة «غائب» + الجمعة والسبت إذا غاب العامل الخميس قبلهما واستمر غيابه الأحد بعدهما.
+     (إن حضر الأحد فالجمعة والسبت قبله حضور؛ فغياب أسبوع كامل من الأحد إلى الخميس = 5 أيام فقط.)
    - إن غاب العامل كل أيام الدوام في الشهر = غياب الشهر كاملاً ولا أجر له.
    - أيام الاستحقاق = أيام الشهر المعتمدة (30) − أيام الغياب، والأجر = الأيام × الأجر اليومي.
 ===================================================================== */
+/* يوم دوام (غير عطلة رسمية) سُجِّل فيه العامل «غائب» */
+function absentOn(d, empId){ if(!isWork(d) || holidayOn(d)) return false; return rec(d,empId)==='absent'; }
+/* جمعة/سبت تُحتسب غياباً: الخميس قبلها غياب والأحد بعدها غياب (عطلة رسمية تقطع الاتصال) */
+function weekendAbsent(d, empId){
+  const wd = parse(d).getDay(); if(wd<5 || holidayOn(d)) return false;
+  const thu = addDays(d, wd===5 ? -1 : -2), sun = addDays(d, wd===5 ? 2 : 1);
+  return absentOn(thu,empId) && absentOn(sun,empId);
+}
 function stats(empId, ym){
   const S = state.settings, base = Number(S.monthBase)||30, wage = Number(S.dailyWage)||0;
   const s = {present:0, absent:0, unrec:0, hol:0, work:0, unrecDays:[]};
@@ -281,8 +290,10 @@ function stats(empId, ym){
     const r = rec(d,empId);
     if(!r){ s.unrec++; s.unrecDays.push(d); } else if(r==='present') s.present++; else s.absent++;
   }
+  s.wk = 0;                                                    // جمعة/سبت ضمن غياب متصل
+  for(const d of monthDays(ym)){ if(!isWork(d) && weekendAbsent(d,empId)) s.wk++; }
   s.fullMonth = s.work>0 && s.absent===s.work;                 // غاب كل أيام الدوام
-  s.absentDays = s.fullMonth ? base : s.absent;
+  s.absentDays = s.fullMonth ? base : Math.min(base, s.absent + s.wk);
   s.paidDays = Math.max(0, base - s.absentDays);
   s.wage = wage; s.amount = s.paidDays * wage;
   return s;
@@ -303,7 +314,7 @@ function render(){
 function dayView(){
   const d = ui.date, wd = parse(d).getDay(), hol = holidayOn(d), off = wd>4, blocked = off || !!hol;
   let banner = '';
-  if(off) banner = `<div class="banner off">${WD[wd]}: لا يُسجَّل فيه حضور ولا يُحتسب غياباً.</div>`;
+  if(off) banner = `<div class="banner off">${WD[wd]}: لا يُسجَّل فيه شيء؛ يُحتسب غياباً تلقائياً فقط إذا غاب العامل الخميس قبله والأحد بعده.</div>`;
   else if(hol) banner = `<div class="banner hol">عطلة رسمية: ${esc(hol.name)} (${fmtShort(hol.start)} ← ${fmtShort(hol.end)}) — لا يُسجَّل حضور.</div>`;
   return `
   <div class="card">
@@ -368,14 +379,14 @@ function reportView(){
   </div>
   <div class="card">
     <h2>ملخص الشهر</h2>
-    <p class="muted" style="margin:0 0 10px">الغياب = أيام الدوام (الأحد–الخميس) المسجّلة «غائب» فقط، والجمعة والسبت لا تُحتسب غياباً. إذا غاب العامل كل أيام الدوام في الشهر يُعتبر غياب الشهر كاملاً ولا أجر له. أيام الاستحقاق = ${state.settings.monthBase} − أيام الغياب.</p>
+    <p class="muted" style="margin:0 0 10px">الغياب = أيام الدوام (الأحد–الخميس) المسجّلة «غائب»؛ وتُضاف الجمعة والسبت (عمود «جمعة/سبت») فقط إذا غاب العامل الخميس قبلهما واستمر غيابه الأحد بعدهما، فإن حضر الأحد فهما حضور (غياب أسبوع كامل = 5 أيام). إذا غاب العامل كل أيام الدوام في الشهر يُعتبر غياب الشهر كاملاً ولا أجر له. أيام الاستحقاق = ${state.settings.monthBase} − أيام الغياب.</p>
     <div class="tablewrap"><table class="data">
-      <thead><tr><th>العامل</th><th>حاضر</th><th>غائب</th><th>عطلة رسمية</th><th>غير مسجّل</th><th>أيام الغياب</th><th>أيام الاستحقاق</th><th>الأجر اليومي</th><th>المبلغ (ر.ق)</th></tr></thead>
+      <thead><tr><th>العامل</th><th>حاضر</th><th>غائب</th><th>جمعة/سبت</th><th>عطلة رسمية</th><th>غير مسجّل</th><th>أيام الغياب</th><th>أيام الاستحقاق</th><th>الأجر اليومي</th><th>المبلغ (ر.ق)</th></tr></thead>
       <tbody>${rows.map(({e,s})=>`<tr><td class="l"><b>${esc(e.short||e.name)}</b>${s.fullMonth?' <span class="tag w">غياب الشهر كاملاً</span>':''}</td>
-        <td>${s.present}</td><td>${s.absent}</td><td>${s.hol||'—'}</td>
+        <td>${s.present}</td><td>${s.absent}</td><td>${s.wk||'—'}</td><td>${s.hol||'—'}</td>
         <td>${s.unrec? `<span class="tag w">${s.unrec}</span>` : '<span class="tag ok">0</span>'}</td>
         <td><b>${s.absentDays}</b></td><td><b>${s.paidDays}</b></td><td>${money(s.wage)}</td><td><b>${money(s.amount)}</b></td></tr>`).join('')}
-        <tr class="sum"><td class="l" colspan="8">إجمالي المبلغ المطلوب تحويله</td><td>${money(total)}</td></tr>
+        <tr class="sum"><td class="l" colspan="9">إجمالي المبلغ المطلوب تحويله</td><td>${money(total)}</td></tr>
       </tbody></table></div>
   </div>
   <div class="card">
@@ -575,7 +586,10 @@ function wkTable(e, ym){
     const wd = parse(d).getDay(), hol = holidayOn(d), r = rec(d,e.id);
     const head = `<td>${i+1}</td><td>${WD[wd]}</td><td>${fmtShort(d)}</td>`;
     if(hol) return `<tr class="hol">${head}<td colspan="3">${esc(hol.name)}</td></tr>`;
-    if(wd>4) return `<tr class="off">${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td><td></td></tr>`;   // الجمعة والسبت تظهر كباقي الأيام: بلا توقيع ولا تُحتسب غياباً
+    if(wd>4){                                                         // الجمعة والسبت: رمادي بلا توقيع، وأصفر «غياب» إن اتصل الغياب عبرهما
+      if(weekendAbsent(d,e.id)) return `<tr class="abs">${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td><td>غياب</td></tr>`;
+      return `<tr class="off">${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td><td></td></tr>`;
+    }
     if(r==='absent') return `<tr class="abs">${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td><td>غياب</td></tr>`;
     if(r==='present') return `<tr>${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td>${sigCell(e,d)}</tr>`;
     return `<tr>${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td><td></td></tr>`;
