@@ -290,7 +290,7 @@ function stats(empId, ym){
 /* =====================================================================
    الواجهة
 ===================================================================== */
-const ui = { tab:'day', date: ymd(new Date()), month: ymd(new Date()).slice(0,7), prt:{xfer:true, att:true, separate:false, sigs:true, wkndSigs:true} };
+const ui = { tab:'day', date: ymd(new Date()), month: ymd(new Date()).slice(0,7), prt:{xfer:true, att:true, separate:false, sigs:true} };
 
 function render(){
   $$('#tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab===ui.tab)));
@@ -385,7 +385,6 @@ function reportView(){
       <label><input type="checkbox" data-prt="att" ${p.att?'checked':''}> جدول الحضور والانصراف</label>
       <label><input type="checkbox" data-prt="separate" ${p.separate?'checked':''}> كل عامل في صفحة مستقلة</label>
       <label><input type="checkbox" data-prt="sigs" ${p.sigs?'checked':''}> إدراج التواقيع الإلكترونية (لمن لديه توقيع)</label>
-      <label title="تُوقَّع الجمعة والسبت إذا كان العامل حاضراً في آخر يوم دوام قبلهما (الخميس)، ولا تُوقَّع ضمن غياب متصل"><input type="checkbox" data-prt="wkndSigs" ${p.wkndSigs?'checked':''}> توقيع الجمعة والسبت حسب حالة الخميس قبلهما</label>
       <button class="btn small" data-act="resalt">تغيير أشكال التواقيع</button>
     </div>
     <button class="btn primary" data-act="preview">معاينة وطباعة التقرير</button>
@@ -568,18 +567,6 @@ function xferHTML(ym){
   </section>`;
 }
 
-/* الجمعة والسبت: لا تُسجَّل ولا تُحتسب غياباً، لكن يُوضع توقيع العامل فيهما إذا كان حاضراً في آخر يوم دوام قبلهما */
-function weekendPresent(empId, d){
-  if(!ui.prt.wkndSigs) return false;
-  const wd = parse(d).getDay(); if(wd<5) return false;
-  let x = addDays(d, wd===5 ? -1 : -2);                    // الخميس السابق
-  for(let k=0;k<5;k++, x=addDays(x,-1)){
-    if(holidayOn(x)) continue;                             // العطلة الرسمية تُتجاوز إلى اليوم الذي قبلها
-    return rec(x,empId)==='present';                       // غير مسجّل = بلا توقيع
-  }
-  return false;
-}
-
 /* ---- الورقة 2: جدول الحضور والانصراف ---- */
 function wkTable(e, ym){
   const s = stats(e.id,ym);
@@ -587,7 +574,7 @@ function wkTable(e, ym){
     const wd = parse(d).getDay(), hol = holidayOn(d), r = rec(d,e.id);
     const head = `<td>${i+1}</td><td>${WD[wd]}</td><td>${fmtShort(d)}</td>`;
     if(hol) return `<tr class="hol">${head}<td colspan="3">${esc(hol.name)}</td></tr>`;
-    if(wd>4) return `<tr>${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td>${weekendPresent(e.id,d) ? sigCell(e,d) : '<td></td>'}</tr>`;   // الجمعة والسبت تظهر كباقي الأيام ولا تُحتسب غياباً
+    if(wd>4) return `<tr>${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td><td></td></tr>`;   // الجمعة والسبت تظهر كباقي الأيام: بلا توقيع ولا تُحتسب غياباً
     if(r==='absent') return `<tr class="abs">${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td><td>غياب</td></tr>`;
     if(r==='present') return `<tr>${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td>${sigCell(e,d)}</tr>`;
     return `<tr>${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td><td></td></tr>`;
