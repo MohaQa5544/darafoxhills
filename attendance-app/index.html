@@ -1,0 +1,869 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>إدارة الحضور والانصراف</title>
+<style>
+:root{
+  color-scheme: light;
+  --green:#0b6b4c; --green-2:#3cb34a; --maroon:#8a1538;
+  --bg:#f3f6f4; --card:#fff; --ink:#1b2a25; --muted:#586661; --line:#d5dfdb; --line-2:#e8eeeb;
+  --ok:#17803f; --ok-bg:#e2f4e8;
+  --paid:#1b66b0; --paid-bg:#e1eefb;
+  --casual:#9a5b00; --casual-bg:#fff0d2;
+  --sick:#a8243b; --sick-bg:#fbe5e9;
+  --hol:#1a7fb0; --hol-bg:#d7eefa;
+  --warn:#9a5b00; --warn-bg:#fff4dc;
+  --radius:12px;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  font-family:"Segoe UI",Tahoma,"Noto Sans Arabic","Noto Naskh Arabic","DejaVu Sans",Arial,sans-serif;
+  background:var(--bg); color:var(--ink); font-size:16px; line-height:1.55;
+}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:3px solid #f0a500; outline-offset:2px}
+
+/* ---------- header ---------- */
+.app-head{background:#fff;border-bottom:4px solid var(--green);display:flex;align-items:center;gap:18px;padding:10px 22px;flex-wrap:wrap}
+.app-head .logos{display:flex;gap:16px;align-items:center;direction:ltr}
+.app-head .logos img{height:50px;width:auto;display:block}
+.app-head .logos .sep{width:1px;height:42px;background:var(--line)}
+.app-head h1{margin:0;font-size:24px;color:var(--green);line-height:1.25}
+.app-head p{margin:2px 0 0;color:var(--muted);font-size:15px}
+.app-head .grow{flex:1}
+.today-pill{background:var(--ok-bg);color:var(--green);border-radius:999px;padding:6px 14px;font-weight:600;font-size:14px;white-space:nowrap}
+
+nav.tabs{display:flex;gap:2px;background:#fff;padding:0 14px;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20;overflow-x:auto}
+nav.tabs button{border:0;background:none;padding:13px 18px;border-bottom:3px solid transparent;color:var(--muted);white-space:nowrap;font-weight:600}
+nav.tabs button:hover{color:var(--green)}
+nav.tabs button[aria-selected=true]{color:var(--green);border-bottom-color:var(--green)}
+
+main{max-width:1000px;margin:0 auto;padding:18px 16px 60px}
+h2{font-size:20px;margin:0 0 4px}
+.muted{color:var(--muted)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:16px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.grow{flex:1}
+
+/* ---------- buttons ---------- */
+.btn{border:1px solid var(--line);background:#fff;border-radius:10px;padding:9px 16px;font-weight:600;min-height:42px}
+.btn:hover{border-color:var(--green);color:var(--green)}
+.btn.primary{background:var(--green);border-color:var(--green);color:#fff}
+.btn.primary:hover{background:#08573d;color:#fff}
+.btn.danger{color:var(--sick);border-color:#e6b9c2}
+.btn.small{padding:5px 12px;min-height:34px;font-size:14px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* ---------- day view ---------- */
+.daybar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.daybar .date-title{font-size:22px;font-weight:800;color:var(--green);min-width:260px;text-align:center;flex:1}
+.daybar input[type=date]{border:1px solid var(--line);border-radius:10px;padding:8px 10px;min-height:42px;background:#fff}
+.strip{display:flex;flex-wrap:wrap;gap:5px;margin-top:12px}
+.chip{width:38px;border:1px solid var(--line);background:#fff;border-radius:9px;padding:3px 0 4px;text-align:center;line-height:1.15}
+.chip small{display:block;font-size:10px;color:var(--muted)}
+.chip b{font-size:15px}
+.chip.done{background:var(--ok-bg);border-color:#9bd3ad}
+.chip.part{background:var(--warn-bg);border-color:#ecc57a}
+.chip.off{background:#eef0ef;color:#97a19d}
+.chip.hol{background:var(--hol-bg);border-color:#8fcbe6}
+.chip.sel{outline:3px solid var(--green);outline-offset:1px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin-top:8px}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid var(--line);vertical-align:-1px;margin-inline-end:4px}
+
+.banner{border-radius:10px;padding:10px 14px;margin-bottom:12px;font-weight:600}
+.banner.off{background:#eef0ef;color:#4b5753}
+.banner.hol{background:var(--hol-bg);color:#0d5578}
+.banner.warn{background:var(--warn-bg);color:var(--warn)}
+
+.group-title{display:flex;align-items:baseline;gap:10px;margin:18px 2px 8px}
+.group-title h3{margin:0;font-size:17px}
+.emp{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;margin-bottom:10px;display:grid;grid-template-columns:200px 1fr;gap:10px 16px;align-items:center}
+.emp.s-present{border-inline-start:6px solid var(--ok)}
+.emp.s-paid{border-inline-start:6px solid var(--paid)}
+.emp.s-casual{border-inline-start:6px solid #d99a1e}
+.emp.s-sick{border-inline-start:6px solid var(--sick)}
+.emp.s-none{border-inline-start:6px solid #c6cfcb}
+.emp .nm b{display:block;font-size:17px}
+.emp .nm small{color:var(--muted)}
+.emp .ctl{display:flex;flex-direction:column;gap:8px}
+.seg{display:flex;flex-wrap:wrap;gap:6px}
+.seg button{border:1.5px solid var(--line);background:#fff;border-radius:10px;padding:8px 16px;min-height:42px;font-weight:600}
+.seg button:hover{border-color:#8aa89d}
+.seg button[aria-pressed=true]{color:#fff;border-color:transparent}
+.seg button[data-v=present][aria-pressed=true]{background:var(--ok)}
+.seg button[data-v=paid][aria-pressed=true]{background:var(--paid)}
+.seg button[data-v=casual][aria-pressed=true]{background:#c98510}
+.seg button[data-v=sick][aria-pressed=true]{background:var(--sick)}
+.seg button[data-v=admin][aria-pressed=true]{background:#2f6f8f}
+.seg button[data-v=site][aria-pressed=true]{background:var(--maroon)}
+.seg.second button{padding:6px 14px;min-height:38px;font-size:15px}
+.proj{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.proj label{display:flex;align-items:center;gap:6px;font-size:14px;color:var(--muted)}
+.proj input{width:110px;border:1.5px solid var(--line);border-radius:9px;padding:7px 10px;min-height:40px;text-align:center;font-size:17px;font-weight:700;color:var(--ink);direction:ltr}
+.proj input.need{border-color:#e0a02b;background:var(--warn-bg)}
+.proj .hint{font-size:13px;color:var(--warn)}
+.disabled-list{opacity:.45;pointer-events:none}
+.daysum{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 2px}
+.daysum span{background:#fff;border:1px solid var(--line);border-radius:999px;padding:3px 12px;font-size:14px}
+@media (max-width:640px){ .emp{grid-template-columns:1fr} }
+
+/* ---------- tables ---------- */
+table.data{width:100%;border-collapse:collapse;background:#fff;font-size:15px}
+table.data th,table.data td{border:1px solid var(--line);padding:7px 8px;text-align:center}
+table.data th{background:#eef5f1;font-weight:700;white-space:nowrap}
+table.data td.l{text-align:start;white-space:nowrap}
+#view table.data th,#view table.data td{padding:7px 6px}
+.tablewrap{overflow-x:auto;border-radius:10px}
+.tag{display:inline-block;border-radius:999px;padding:1px 10px;font-size:13px;font-weight:700}
+.tag.w{background:var(--warn-bg);color:var(--warn)}
+.tag.ok{background:var(--ok-bg);color:var(--ok)}
+
+/* ---------- forms ---------- */
+.field{display:flex;flex-direction:column;gap:4px}
+.field label{font-size:14px;color:var(--muted);font-weight:600}
+.field input,.field select{border:1px solid var(--line);border-radius:9px;padding:9px 10px;min-height:42px;background:#fff;width:100%}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+dialog{border:0;border-radius:14px;padding:0;width:min(720px,94vw);box-shadow:0 20px 60px rgba(0,0,0,.35)}
+dialog::backdrop{background:rgba(10,30,22,.45)}
+dialog form{padding:18px}
+dialog h3{margin:0 0 12px}
+.ltr{direction:ltr;text-align:right}
+
+.toast{position:fixed;bottom:18px;inset-inline-start:18px;background:#1b2a25;color:#fff;padding:10px 18px;border-radius:10px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:99}
+.toast.show{opacity:.95}
+
+/* ---------- print preview overlay ---------- */
+#preview{position:fixed;inset:0;background:#6b7773;overflow:auto;z-index:100;display:none}
+#preview.open{display:block}
+.pv-bar{position:sticky;top:0;z-index:5;background:#16241f;color:#fff;padding:10px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.pv-bar .btn{min-height:38px}
+.pv-bar .warn{background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:4px 12px;font-size:14px}
+.pv-pages{padding:20px 0}
+.sheet{width:194mm;height:280mm;background:#fff;margin:0 auto 18px;padding:0;box-shadow:0 4px 24px rgba(0,0,0,.35);overflow:hidden;color:#000;position:relative}
+
+/* ---------- form sheets (screen + print) ---------- */
+.sheet{font-family:"Segoe UI",Tahoma,"Noto Sans Arabic","DejaVu Sans",Arial,sans-serif}
+.sheet .band{display:flex;justify-content:space-between;align-items:center;direction:ltr;height:17mm;padding:0 1mm}
+.sheet .band img{height:15mm;width:auto;display:block}
+.sheet .band .mid{flex:1;text-align:center;direction:rtl;font-weight:700;font-size:11pt}
+.sheet table{border-collapse:collapse;width:100%}
+.sheet td,.sheet th{border:.3mm solid #000;text-align:center;padding:0 1mm;line-height:1.1;overflow:hidden}
+.sheet .ctitle{font-size:12.5pt;font-weight:800;text-align:center;margin:1mm 0 .5mm}
+.sheet .csub{font-size:10.5pt;text-align:center;margin:0 0 2mm}
+
+/* consolidated */
+.cons{font-size:calc(var(--rh) * .56)}
+.cons td,.cons th{height:var(--rh)}
+.cons th{background:#e8f1ec;font-weight:800}
+.cons tr.wk td{background:#e8f1ec;font-weight:700}
+.cons .nm{text-align:right;white-space:nowrap;padding-inline:1.2mm;font-weight:600}
+.cons .code{font-weight:800}
+.cons .x{background:#d9d9d9;color:#d00000;font-weight:800}
+.cons .abs{background:#fff0d2}
+.cons .site{color:#7a0f2e}
+.cons td.hol{background:#bfe6f7;font-weight:800}
+.cons td.hol span{writing-mode:vertical-rl;transform:rotate(180deg);display:inline-block;white-space:nowrap}
+.cons td.void{background:#efefef}
+.legendbox{margin-top:2.5mm;font-size:8.5pt;line-height:1.5;border:.3mm solid #000;padding:1.5mm 2.5mm}
+.legendbox b{font-weight:800}
+.sigrow{display:flex;justify-content:space-between;margin-top:3mm;font-size:10pt}
+
+/* individual sheet */
+.ind .info td{height:6.4mm;font-size:9.5pt;text-align:right;padding-inline:2mm;font-weight:600}
+.ind .info td .lb{font-weight:700}
+.ind .info td b.v{font-weight:800}
+.ind .info td.ab{background:#fff200}
+.ind .info td.wk{background:#e4f1d4}
+.ind .days{margin-top:0}
+.ind .days th{background:#f2f2f2;font-size:9pt;height:5.4mm}
+.ind .days td{height:var(--rh);font-size:9.5pt}
+.ind .days tr.newwk td{border-top-width:.7mm}
+.ind .days tr.abs td{background:#fff200}
+.ind .days tr.hol td{background:#00b0f0;font-weight:700}
+.ind .days tr.blank td{background:#fff}
+.ind .foot{display:flex;justify-content:space-between;margin-top:4mm;font-size:10pt}
+.ind .foot span.dots{display:inline-block;width:55mm;border-bottom:.3mm dotted #000}
+.ind .stamp{position:absolute;bottom:2mm;inset-inline-end:3mm;font-size:9pt;direction:ltr}
+
+@media print{
+  @page{size:A4 portrait;margin:8mm}
+  html,body{background:#fff}
+  body > *:not(#preview){display:none !important}
+  #preview{position:static;background:#fff;overflow:visible;display:block}
+  .pv-bar{display:none !important}
+  .pv-pages{padding:0}
+  .sheet{box-shadow:none;margin:0;break-after:page;page-break-after:always}
+  .sheet:last-child{break-after:auto;page-break-after:auto}
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}
+</style>
+</head>
+<body>
+
+<header class="app-head">
+  <div class="logos"><img id="hdrAwqaf" alt="الإدارة العامة للأوقاف"><span class="sep"></span><img id="hdrMoe" alt="وزارة الأوقاف والشؤون الإسلامية"></div>
+  <div>
+    <h1>إدارة الحضور والانصراف</h1>
+    <p>التكليف المسائي - إدارة الاستثمار</p>
+  </div>
+  <div class="grow"></div>
+  <div class="today-pill" id="todayPill"></div>
+</header>
+
+<nav class="tabs" role="tablist" id="tabs">
+  <button role="tab" data-tab="day">الإدخال اليومي</button>
+  <button role="tab" data-tab="report">التقرير الشهري والطباعة</button>
+  <button role="tab" data-tab="holidays">العطل الرسمية</button>
+  <button role="tab" data-tab="setup">الموظفون والإعدادات</button>
+</nav>
+
+<main id="view"></main>
+
+<dialog id="empDlg"></dialog>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div id="preview" aria-label="معاينة الطباعة"></div>
+
+<script src="logos.js"></script>
+<script src="data.local.js" onerror="void 0"></script>
+<script>
+(function(){
+'use strict';
+
+/* =====================================================================
+   ثوابت
+===================================================================== */
+const KEY = 'attendance_evening_v1';
+const WD = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
+const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+const WEEKN = ['الأول','الثاني','الثالث','الرابع','الخامس','السادس'];
+const ST = {
+  present:{label:'حاضر',        code:'√'},
+  paid:   {label:'إجازة براتب', code:'ج.ر'},
+  casual: {label:'إجازة عارضة', code:'ج.ع'},
+  sick:   {label:'إجازة مرضية', code:'ج.م'}
+};
+const HOL_PRESETS = ['عيد الفطر السعيد','عيد الأضحى المبارك','اليوم الوطني','اليوم الرياضي'];
+
+const SAMPLE_EMPLOYEES = [1,2,3,4,5,6,7,8].map(i=>({
+  id:'e'+i, group:'projects', name:'مهندس تجريبي '+i, short:'مهندس '+i, dept:'الاستثمار', section:'المشاريع',
+  job:'مهندس', idCard:'0000000000'+i, empNo:'0000'+i, jobNo:'0000'+i, bank:'—', iban:'QA00XXXX000000000000000000000'
+})).concat([9,10].map(i=>({
+  id:'e'+i, group:'realestate', name:'موظف عقارات تجريبي '+(i-8), short:'عقارات '+(i-8), dept:'الاستثمار', section:'العقارات',
+  job:'مهندس', idCard:'000000000'+i, empNo:'000'+i, jobNo:'000'+i, bank:'—', iban:'QA00XXXX000000000000000000000'
+})));
+
+function defaultSettings(){
+  return { orderNo:'2954-2023', requestNo:'2913-2023', account:'4211-13', reward:'5.500',
+           startDate:'2023-08-31', total:18, monthBase:30, shiftStart:2, shiftEnd:5, countPaid:true };
+}
+
+/* =====================================================================
+   الحالة والتخزين
+===================================================================== */
+let state = null;
+let storageOk = true;
+
+function load(){
+  try{ const raw = localStorage.getItem(KEY); if(raw) return JSON.parse(raw); }catch(e){ storageOk = false; }
+  return null;
+}
+function save(){
+  try{ localStorage.setItem(KEY, JSON.stringify(state)); storageOk = true; }
+  catch(e){ storageOk = false; toast('تعذّر الحفظ في المتصفح — استخدم «نسخة احتياطية» من صفحة الإعدادات'); }
+}
+function initState(){
+  state = load();
+  if(!state){
+    const L = window.LOCAL_DATA;
+    state = { v:1, settings:defaultSettings(), employees: L? L.employees : SAMPLE_EMPLOYEES,
+              records: L? L.records : {}, holidays:[] };
+    save();
+  }
+  state.settings = Object.assign(defaultSettings(), state.settings||{});
+  state.holidays = state.holidays || [];
+  state.records = state.records || {};
+}
+
+/* =====================================================================
+   أدوات التاريخ والنص
+===================================================================== */
+const $ = (s,el)=> (el||document).querySelector(s);
+const $$ = (s,el)=> Array.from((el||document).querySelectorAll(s));
+const pad = n => String(n).padStart(2,'0');
+const ymd = d => d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+const parse = s => { const [y,m,d] = s.split('-').map(Number); return new Date(y,m-1,d); };
+const addDays = (s,n) => { const d = parse(s); d.setDate(d.getDate()+n); return ymd(d); };
+const isWork = s => parse(s).getDay() <= 4;           // الأحد–الخميس
+const fmtLong = s => { const d = parse(s); return WD[d.getDay()]+' '+d.getDate()+' '+MONTHS[d.getMonth()]+' '+d.getFullYear(); };
+const fmtShort = s => { const d = parse(s); return d.getDate()+'/'+(d.getMonth()+1)+'/'+d.getFullYear(); };
+const monthLabel = ym => { const [y,m] = ym.split('-').map(Number); return MONTHS[m-1]+' '+y; };
+const esc = t => String(t==null?'':t).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function monthDays(ym){ const [y,m] = ym.split('-').map(Number); const n = new Date(y,m,0).getDate(); return Array.from({length:n},(_,i)=> ym+'-'+pad(i+1)); }
+function weeksOf(ym){
+  const [y,m] = ym.split('-').map(Number);
+  const first = new Date(y,m-1,1), last = new Date(y,m,0);
+  const start = new Date(first); start.setDate(start.getDate()-start.getDay());
+  const weeks = [];
+  for(let d = new Date(start); d <= last; d.setDate(d.getDate()+7)){
+    const w = [];
+    for(let i=0;i<5;i++){ const x = new Date(d); x.setDate(d.getDate()+i); w.push(x>=first && x<=last ? ymd(x) : null); }
+    if(w.some(Boolean)) weeks.push(w);
+  }
+  return weeks;
+}
+function holidayOn(s){ return state.holidays.find(h => h.start <= s && s <= h.end) || null; }
+function rec(d,emp){ return (state.records[d] && state.records[d][emp]) || null; }
+function setRec(d,emp,val){
+  if(!state.records[d]) state.records[d] = {};
+  if(val) state.records[d][emp] = val; else delete state.records[d][emp];
+  if(!Object.keys(state.records[d]).length) delete state.records[d];
+}
+function siteCode(r){ return [r.p1,r.p2].map(x=>String(x||'').trim()).filter(Boolean).join('-'); }
+function toast(msg){ const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast._t); toast._t = setTimeout(()=>t.classList.remove('show'),2200); }
+const hh = h => h+':00';
+
+/* =====================================================================
+   إحصاءات الشهر
+===================================================================== */
+function stats(empId, ym){
+  const s = {admin:0,site:0,paid:0,casual:0,sick:0,unrec:0,hol:0,work:0,unrecDays:[]};
+  for(const d of monthDays(ym)){
+    if(!isWork(d)) continue;
+    if(holidayOn(d)){ s.hol++; continue; }
+    s.work++;
+    const r = rec(d,empId);
+    if(!r){ s.unrec++; s.unrecDays.push(d); continue; }
+    if(r.s==='present'){ if(r.loc==='site') s.site++; else s.admin++; } else s[r.s]++;
+  }
+  s.absent = s.casual + s.sick + (state.settings.countPaid ? s.paid : 0);
+  s.workDays = state.settings.monthBase - s.absent;
+  return s;
+}
+
+/* =====================================================================
+   الواجهة العامة
+===================================================================== */
+const ui = { tab:'day', date: ymd(new Date()), month: ymd(new Date()).slice(0,7),
+             prt:{cons:true, projects:true, realestate:true} };
+
+function render(){
+  $$('#tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab===ui.tab)));
+  const v = $('#view');
+  if(ui.tab==='day') v.innerHTML = dayView();
+  else if(ui.tab==='report') v.innerHTML = reportView();
+  else if(ui.tab==='holidays') v.innerHTML = holidaysView();
+  else v.innerHTML = setupView();
+}
+
+/* ---------------------------------------------------------------------
+   1) الإدخال اليومي
+--------------------------------------------------------------------- */
+function dayView(){
+  const d = ui.date, wd = parse(d).getDay(), hol = holidayOn(d), off = wd>4;
+  const blocked = off || !!hol;
+  const emps = state.employees;
+  const proj = emps.filter(e=>e.group==='projects'), re = emps.filter(e=>e.group!=='projects');
+
+  let banner = '';
+  if(off) banner = `<div class="banner off">${WD[wd]} إجازة أسبوعية — لا يوجد دوام مسائي في هذا اليوم.</div>`;
+  else if(hol) banner = `<div class="banner hol">عطلة رسمية: ${esc(hol.name)} (${fmtShort(hol.start)} ← ${fmtShort(hol.end)}) — لا يُسجَّل حضور.</div>`;
+
+  return `
+  <div class="card">
+    <div class="daybar">
+      <button class="btn" data-act="prevday">→ اليوم السابق</button>
+      <div class="date-title">${fmtLong(d)}</div>
+      <button class="btn" data-act="nextday">اليوم التالي ←</button>
+    </div>
+    <div class="row" style="margin-top:10px;justify-content:center">
+      <input type="date" id="datePick" value="${d}" aria-label="اختيار التاريخ">
+      <button class="btn small" data-act="today">اليوم</button>
+    </div>
+    ${monthStrip(d)}
+  </div>
+
+  ${banner}
+  <div class="${blocked?'disabled-list':''}" id="daylist">
+    <div class="row" style="margin:0 2px 8px">
+      <div class="daysum" id="daysum">${daySummary(d)}</div>
+      <div class="grow"></div>
+      <button class="btn small" data-act="allAdmin" ${blocked?'disabled':''}>تعيين الباقي: حاضر بالإدارة</button>
+      <button class="btn small danger" data-act="clearDay" ${blocked?'disabled':''}>مسح تسجيل اليوم</button>
+    </div>
+    <div class="group-title"><h3>مهندسو قسم المشاريع</h3><span class="muted">${proj.length} — يظهرون في البيان المجمّع</span></div>
+    ${proj.map(e=>empCard(e,d)).join('')}
+    ${re.length? `<div class="group-title"><h3>قسم العقارات</h3><span class="muted">${re.length} — كشوفهم تُطبع منفردة فقط</span></div>${re.map(e=>empCard(e,d)).join('')}`:''}
+  </div>
+  <p class="muted" style="margin-top:14px">يُحفظ كل تغيير تلقائياً في هذا المتصفح. خذ نسخة احتياطية من صفحة «الموظفون والإعدادات» بشكل دوري.${storageOk?'':' <b style="color:var(--sick)">⚠ التخزين غير متاح الآن.</b>'}</p>`;
+}
+
+function monthStrip(d){
+  const ym = d.slice(0,7);
+  const chips = monthDays(ym).map(x=>{
+    const wd = parse(x).getDay(); const h = holidayOn(x);
+    let cls = '', title = '';
+    if(wd>4){ cls='off'; }
+    else if(h){ cls='hol'; title = h.name; }
+    else {
+      const n = state.employees.filter(e=>rec(x,e.id)).length;
+      cls = n===0 ? '' : (n>=state.employees.length ? 'done':'part');
+    }
+    if(x===d) cls += ' sel';
+    return `<button class="chip ${cls}" data-act="goto" data-d="${x}" title="${esc(title)}"><small>${WD[wd].slice(0,3)}</small><b>${+x.slice(8)}</b></button>`;
+  }).join('');
+  return `<div class="strip" aria-label="أيام الشهر">${chips}</div>
+  <div class="legend"><span><i style="background:var(--ok-bg)"></i>مكتمل التسجيل</span><span><i style="background:var(--warn-bg)"></i>تسجيل جزئي</span><span><i style="background:#fff"></i>لم يُسجَّل</span><span><i style="background:#eef0ef"></i>جمعة/سبت</span><span><i style="background:var(--hol-bg)"></i>عطلة رسمية</span></div>`;
+}
+
+function empCard(e,d){
+  const r = rec(d,e.id);
+  const cls = r ? 's-'+r.s : 's-none';
+  const btn = (v,label) => `<button data-act="st" data-emp="${e.id}" data-v="${v}" aria-pressed="${!!r && r.s===v}">${label}</button>`;
+  let more = '';
+  if(r && r.s==='present'){
+    const loc = r.loc==='site' ? 'site' : 'admin';
+    more = `<div class="seg second" role="group" aria-label="مكان الحضور">
+      <button data-act="loc" data-emp="${e.id}" data-v="admin" aria-pressed="${loc==='admin'}">في الإدارة</button>
+      <button data-act="loc" data-emp="${e.id}" data-v="site"  aria-pressed="${loc==='site'}">في الموقع</button></div>`;
+    if(loc==='site'){
+      const need = !siteCode(r);
+      more += `<div class="proj">
+        <label>رقم مشروع الوقف <input data-f="p1" data-emp="${e.id}" value="${esc(r.p1||'')}" inputmode="numeric" maxlength="8" class="${need?'need':''}" aria-label="رقم المشروع الأول"></label>
+        <label>مشروع آخر (اختياري) <input data-f="p2" data-emp="${e.id}" value="${esc(r.p2||'')}" inputmode="numeric" maxlength="8" aria-label="رقم المشروع الثاني"></label>
+        ${need?'<span class="hint">أدخل رقم مشروع واحد على الأقل</span>':''}</div>`;
+    }
+  }
+  return `<div class="emp ${cls}" data-card="${e.id}">
+    <div class="nm"><b>${esc(e.short||e.name)}</b><small>${esc(e.job||'')}</small></div>
+    <div class="ctl">
+      <div class="seg" role="group" aria-label="الحالة">
+        ${btn('present','حاضر')}${btn('paid','إجازة براتب')}${btn('casual','عارضة')}${btn('sick','مرضية')}
+      </div>
+      ${more}
+    </div></div>`;
+}
+
+function daySummary(d){
+  let a=0,s=0,l=0,u=0;
+  state.employees.forEach(e=>{ const r = rec(d,e.id); if(!r) u++; else if(r.s==='present'){ r.loc==='site'? s++ : a++; } else l++; });
+  return `<span>حاضر بالإدارة: <b>${a}</b></span><span>في المواقع: <b>${s}</b></span><span>إجازات: <b>${l}</b></span><span>لم يُسجَّل: <b>${u}</b></span>`;
+}
+
+function refreshDayBits(){
+  const el = $('#daysum'); if(el) el.innerHTML = daySummary(ui.date);
+}
+
+/* ---------------------------------------------------------------------
+   2) التقرير الشهري
+--------------------------------------------------------------------- */
+function reportView(){
+  const ym = ui.month;
+  const proj = state.employees.filter(e=>e.group==='projects'), re = state.employees.filter(e=>e.group!=='projects');
+  const row = e => {
+    const s = stats(e.id,ym);
+    return `<tr>
+      <td class="l"><b>${esc(e.short||e.name)}</b></td>
+      <td>${s.admin}</td><td>${s.site}</td><td>${s.paid}</td><td>${s.casual}</td><td>${s.sick}</td>
+      <td>${s.hol||'—'}</td>
+      <td>${s.unrec? `<span class="tag w">${s.unrec}</span>` : '<span class="tag ok">0</span>'}</td>
+      <td><b>${s.absent}</b></td><td><b>${s.workDays}</b></td>
+      <td><button class="btn small" data-act="printOne" data-emp="${e.id}">طباعة</button></td></tr>`;
+  };
+  const total = state.employees.reduce((n,e)=> n + stats(e.id,ym).unrec, 0);
+  const p = ui.prt;
+  return `
+  <div class="card">
+    <div class="daybar">
+      <button class="btn" data-act="prevmonth">→ الشهر السابق</button>
+      <div class="date-title">${monthLabel(ym)}</div>
+      <button class="btn" data-act="nextmonth">الشهر التالي ←</button>
+    </div>
+    ${total? `<div class="banner warn" style="margin:12px 0 0">يوجد ${total} خانة حضور لم تُسجَّل في أيام الدوام لهذا الشهر — ستظهر فارغة في الطباعة.</div>`:''}
+  </div>
+
+  <div class="card">
+    <h2>ملخص الشهر</h2>
+    <p class="muted" style="margin:0 0 10px">أيام الدوام = الأحد إلى الخميس بعد استبعاد العطل الرسمية. أيام العمل = ${state.settings.monthBase} − أيام الغياب${state.settings.countPaid?' (الإجازة براتب محسوبة ضمن الغياب)':' (الإجازة براتب غير محسوبة)'}.</p>
+    <div class="tablewrap"><table class="data">
+      <thead><tr><th>الموظف</th><th>بالإدارة</th><th>بالموقع</th><th>براتب</th><th>عارضة</th><th>مرضية</th><th>عطلة</th><th>غير مسجّل</th><th>الغياب</th><th>أيام العمل</th><th></th></tr></thead>
+      <tbody>
+        <tr><td class="l" colspan="11" style="background:#f6faf8"><b>قسم المشاريع</b></td></tr>
+        ${proj.map(row).join('')}
+        ${re.length? `<tr><td class="l" colspan="11" style="background:#f6faf8"><b>قسم العقارات</b> <span class="muted">(خارج البيان المجمّع)</span></td></tr>${re.map(row).join('')}`:''}
+      </tbody></table></div>
+  </div>
+
+  <div class="card">
+    <h2>الطباعة</h2>
+    <p class="muted" style="margin:0 0 10px">الترتيب: البيان المجمّع (صفحة واحدة) ← كشوف المهندسين الثمانية ← كشفا قسم العقارات.</p>
+    <div class="row" style="gap:18px;margin-bottom:12px">
+      <label><input type="checkbox" data-prt="cons" ${p.cons?'checked':''}> البيان المجمّع للمشاريع</label>
+      <label><input type="checkbox" data-prt="projects" ${p.projects?'checked':''}> كشوف مهندسي المشاريع</label>
+      <label><input type="checkbox" data-prt="realestate" ${p.realestate?'checked':''}> كشوف قسم العقارات</label>
+    </div>
+    <button class="btn primary" data-act="preview">معاينة وطباعة التقرير</button>
+  </div>`;
+}
+
+/* ---------------------------------------------------------------------
+   3) العطل الرسمية
+--------------------------------------------------------------------- */
+function countDays(a,b){
+  let cal=0, work=0;
+  for(let d=a; d<=b; d=addDays(d,1)){ cal++; if(isWork(d)) work++; }
+  return {cal,work};
+}
+function holidaysView(){
+  const list = state.holidays.slice().sort((a,b)=> a.start<b.start?-1:1);
+  const today = ymd(new Date());
+  return `
+  <div class="card">
+    <h2>إضافة عطلة رسمية</h2>
+    <p class="muted" style="margin:0 0 12px">تُطبَّق العطلة على جميع الموظفين: لا يُسجَّل فيها حضور، وتظهر باللون الأزرق في البيان والكشوف، ولا تُحسب غياباً.</p>
+    <form id="holForm" class="grid2">
+      <div class="field"><label for="hKind">العطلة</label>
+        <select id="hKind">${HOL_PRESETS.map(n=>`<option>${n}</option>`).join('')}<option value="__other">أخرى (اكتب الاسم)…</option></select></div>
+      <div class="field" id="hNameWrap" hidden><label for="hName">اسم العطلة</label><input id="hName" placeholder="مثال: يوم حداد وطني"></div>
+      <div class="field"><label for="hStart">من تاريخ</label><input type="date" id="hStart" value="${today}" required></div>
+      <div class="field"><label for="hEnd">إلى تاريخ</label><input type="date" id="hEnd" value="${today}" required></div>
+      <div class="field" style="justify-content:flex-end"><div id="hCount" class="muted" style="min-height:24px"></div>
+        <button class="btn primary" type="submit">إضافة العطلة</button></div>
+    </form>
+  </div>
+  <div class="card">
+    <h2>العطل المسجّلة</h2>
+    ${list.length? `<div class="tablewrap"><table class="data"><thead><tr><th>العطلة</th><th>من</th><th>إلى</th><th>الأيام</th><th>منها أيام دوام</th><th></th></tr></thead><tbody>
+      ${list.map(h=>{ const c = countDays(h.start,h.end); return `<tr><td class="l"><b>${esc(h.name)}</b></td><td>${fmtShort(h.start)}</td><td>${fmtShort(h.end)}</td><td>${c.cal}</td><td>${c.work}</td><td><button class="btn small danger" data-act="delhol" data-id="${h.id}">حذف</button></td></tr>`; }).join('')}
+      </tbody></table></div>` : '<p class="muted">لا توجد عطل مسجّلة.</p>'}
+  </div>`;
+}
+
+/* ---------------------------------------------------------------------
+   4) الموظفون والإعدادات
+--------------------------------------------------------------------- */
+function setupView(){
+  const s = state.settings;
+  const f = (k,label,type) => `<div class="field"><label for="s_${k}">${label}</label><input id="s_${k}" data-set="${k}" type="${type||'text'}" value="${esc(s[k])}"></div>`;
+  return `
+  <div class="card">
+    <div class="row"><h2 class="grow">الموظفون</h2><button class="btn primary small" data-act="addEmp">+ إضافة موظف</button></div>
+    <p class="muted" style="margin:0 0 10px">هذه البيانات تظهر في أعلى كل كشف توقيعات (ثابتة لكل مهندس).</p>
+    <div class="tablewrap"><table class="data"><thead><tr><th>الاسم</th><th>القسم</th><th>الوظيفة</th><th>البنك</th><th></th></tr></thead><tbody>
+    ${state.employees.map(e=>`<tr><td class="l"><b>${esc(e.name)}</b><br><span class="muted" style="font-size:13px">يظهر باسم: ${esc(e.short||'')}</span></td>
+      <td>${esc(e.section||'')}<br><span class="tag ${e.group==='projects'?'ok':'w'}">${e.group==='projects'?'في البيان المجمّع':'كشف منفرد'}</span></td>
+      <td>${esc(e.job||'')}</td><td>${esc(e.bank||'')}</td>
+      <td><button class="btn small" data-act="editEmp" data-emp="${e.id}">تعديل</button></td></tr>`).join('')}
+    </tbody></table></div>
+  </div>
+
+  <div class="card">
+    <h2>بيانات التكليف (تظهر في الكشوف)</h2>
+    <div class="grid2" style="margin-top:10px">
+      ${f('orderNo','أمر تكليف رقم')}${f('requestNo','طلب طرح رقم')}${f('account','رقم حساب وبند الصرف')}
+      ${f('reward','قيمة المكافأة الشهرية (ر.ق)')}${f('startDate','تاريخ بداية العمل الفعلي','date')}${f('total','عدد المكلفين','number')}
+      ${f('monthBase','أيام الشهر المعتمدة للحساب','number')}${f('shiftStart','ساعة الحضور (رقم)','number')}${f('shiftEnd','ساعة الانصراف (رقم)','number')}
+    </div>
+    <label style="display:flex;gap:8px;align-items:center;margin-top:14px"><input type="checkbox" data-setchk="countPaid" ${s.countPaid?'checked':''}> احتساب «الإجازة براتب» ضمن أيام الغياب</label>
+  </div>
+
+  <div class="card">
+    <h2>النسخ الاحتياطي</h2>
+    <p class="muted" style="margin:0 0 10px">البيانات محفوظة داخل هذا المتصفح فقط. حمّل نسخة احتياطية بعد كل تسجيل مهم، ويمكنك استرجاعها على أي جهاز.</p>
+    <div class="row">
+      <button class="btn" data-act="export">تنزيل نسخة احتياطية</button>
+      <label class="btn" style="cursor:pointer">استرجاع نسخة <input type="file" id="importFile" accept="application/json,.json" hidden></label>
+      <button class="btn danger" data-act="reset">مسح كل البيانات</button>
+    </div>
+  </div>`;
+}
+
+function empDialog(id){
+  const e = state.employees.find(x=>x.id===id) || {id:'e'+Date.now(), group:'projects', dept:'الاستثمار', section:'المشاريع'};
+  const isNew = !state.employees.some(x=>x.id===e.id);
+  const F = (k,label,cls) => `<div class="field"><label for="d_${k}">${label}</label><input id="d_${k}" name="${k}" value="${esc(e[k]||'')}" class="${cls||''}"></div>`;
+  const dlg = $('#empDlg');
+  dlg.innerHTML = `<form method="dialog" id="empForm">
+    <h3>${isNew?'إضافة موظف':'تعديل بيانات الموظف'}</h3>
+    <div class="grid2">
+      ${F('name','الاسم الكامل')}${F('short','الاسم المختصر (يظهر في البيان)')}
+      <div class="field"><label for="d_group">القسم في التقرير</label><select id="d_group" name="group">
+        <option value="projects" ${e.group==='projects'?'selected':''}>المشاريع — يدخل البيان المجمّع</option>
+        <option value="realestate" ${e.group!=='projects'?'selected':''}>العقارات — كشف منفرد فقط</option></select></div>
+      ${F('dept','الإدارة')}${F('section','القسم')}${F('job','وظيفة التكليف')}
+      ${F('idCard','رقم البطاقة الشخصية','ltr')}${F('empNo','الموظف (رقم)','ltr')}${F('jobNo','الوظيفة (رقم)','ltr')}
+      ${F('bank','البنك')}${F('iban','آيبان رقم','ltr')}
+    </div>
+    <div class="row" style="margin-top:16px">
+      <button class="btn primary" value="save" id="empSave">حفظ</button>
+      <button class="btn" value="cancel" formnovalidate>إلغاء</button>
+      <div class="grow"></div>
+      ${isNew?'':'<button class="btn danger" type="button" id="empDel">حذف الموظف</button>'}
+    </div></form>`;
+  dlg.dataset.emp = e.id; dlg.dataset.isnew = isNew ? '1':'';
+  dlg.showModal();
+}
+
+/* =====================================================================
+   النماذج المطبوعة
+===================================================================== */
+function logoBand(mid){
+  return `<div class="band"><img src="${LOGO_AWQAF}" alt=""><div class="mid">${mid||''}</div><img src="${LOGO_MOE}" alt=""></div>`;
+}
+
+/* ---- البيان المجمّع (صفحة واحدة) ---- */
+function consolidatedHTML(ym){
+  const S = state.settings;
+  const emps = state.employees.filter(e=>e.group==='projects');
+  const weeks = weeksOf(ym);
+  const rows = 1 + weeks.length*(emps.length+1);
+  const rh = Math.max(3.6, Math.min(6.2, 214/rows));
+  const days = monthDays(ym);
+  const [y,m] = ym.split('-').map(Number);
+
+  let html = `<section class="sheet" style="--rh:${rh.toFixed(2)}mm">${logoBand('')}
+    <div class="ctitle">بيان الحضور الفترة المسائية ( أمر تكليف / ${esc(S.orderNo)} )</div>
+    <div class="csub">من 1 ${MONTHS[m-1]} ${y} إلى ${days.length} ${MONTHS[m-1]} ${y}</div>
+    <table class="cons"><colgroup><col style="width:6mm"><col style="width:29mm"><col style="width:9mm">${'<col style="width:17mm"><col style="width:5.5mm"><col style="width:5.5mm">'.repeat(5)}</colgroup>
+    <thead><tr><th rowspan="1">م</th><th>الاسم</th><th>عدد أيام</th>${[0,1,2,3,4].map(i=>`<th colspan="3">${WD[i]}</th>`).join('')}</tr></thead><tbody>`;
+
+  weeks.forEach((w,wi)=>{
+    html += `<tr class="wk"><td colspan="2">الأسبوع ${WEEKN[wi]}</td><td>أيام</td>${w.map(d=> d? `<td>${+d.slice(8)}/${+d.slice(5,7)}</td><td>ح</td><td>ن</td>` : '<td></td><td></td><td></td>').join('')}</tr>`;
+    emps.forEach((e,ei)=>{
+      let cnt = 0;
+      w.forEach(d=>{ if(d && !holidayOn(d)){ const r = rec(d,e.id); if(r && r.s==='present') cnt++; } });
+      html += `<tr><td>${ei+1}</td><td class="nm">${esc(e.short||e.name)}</td><td>${cnt||''}</td>`;
+      w.forEach(d=>{
+        if(!d){ if(ei===0) html += `<td class="void" colspan="3" rowspan="${emps.length}"></td>`; return; }
+        const h = holidayOn(d);
+        if(h){ if(ei===0) html += `<td class="hol" colspan="3" rowspan="${emps.length}"><span>${esc(h.name)}</span></td>`; return; }
+        const r = rec(d,e.id);
+        if(!r){ html += '<td></td><td></td><td></td>'; return; }
+        if(r.s==='present'){
+          if(r.loc==='site') html += `<td class="code site">${esc(siteCode(r)||'موقع')}</td><td>${S.shiftStart}</td><td>${S.shiftEnd}</td>`;
+          else html += `<td class="code">√</td><td>${S.shiftStart}</td><td>${S.shiftEnd}</td>`;
+        } else html += `<td class="code abs">${ST[r.s].code}</td><td class="x">X</td><td class="x">X</td>`;
+      });
+      html += '</tr>';
+    });
+  });
+  html += `</tbody></table>
+    <div class="legendbox"><b>الرموز:</b> √ = حاضر في الإدارة (من ${hh(S.shiftStart)} إلى ${hh(S.shiftEnd)}) &nbsp;|&nbsp; أرقام (مثل 391-70) = حاضر في موقع مشروع الوقف رقم كذا &nbsp;|&nbsp; ج.ر = إجازة براتب &nbsp;|&nbsp; ج.ع = إجازة عارضة &nbsp;|&nbsp; ج.م = إجازة مرضية &nbsp;|&nbsp; X = غياب &nbsp;|&nbsp; ح = حضور، ن = انصراف &nbsp;|&nbsp; الأزرق = عطلة رسمية</div>
+    <div class="sigrow"><span>اعتماد: ........................................</span><span>اعتماد: ........................................</span></div>
+  </section>`;
+  return html;
+}
+
+/* ---- كشف توقيعات فردي ---- */
+function sheetHTML(e, ym){
+  const S = state.settings, st = stats(e.id,ym);
+  const weeks = weeksOf(ym);
+  const nrows = weeks.length*5;
+  const rh = Math.min(8.4, 184/ nrows);
+  const [y,m] = ym.split('-').map(Number);
+
+  const info = `<table class="info"><colgroup><col style="width:34%"><col style="width:30%"><col style="width:36%"></colgroup><tbody>
+    <tr><td colspan="2"><span class="lb">الاسم:</span> <b class="v">${esc(e.name)}</b></td><td><span class="lb">رقم البطاقة الشخصية:</span> <b class="v">${esc(e.idCard)}</b></td></tr>
+    <tr><td colspan="2"><span class="lb">الإدارة:</span> <b class="v">${esc(e.dept)}</b></td><td><span class="lb">وظيفة التكليف:</span> <b class="v">${esc(e.job)}</b></td></tr>
+    <tr><td><span class="lb">القسم:</span> <b class="v">${esc(e.section)}</b></td><td><span class="lb">الموظف:</span> <b class="v">${esc(e.empNo)}</b></td><td><span class="lb">طلب طرح رقم:</span> <b class="v">${esc(S.requestNo)}م</b></td></tr>
+    <tr><td><span class="lb">قيمة المكافأة الشهرية:</span> <b class="v">${esc(S.reward)} ر.ق</b></td><td><span class="lb">الوظيفة:</span> <b class="v">${esc(e.jobNo)}</b></td><td><span class="lb">أمر تكليف رقم:</span> <b class="v">${esc(S.orderNo)}م</b></td></tr>
+    <tr><td colspan="2"><span class="lb">رقم حساب وبند الصرف:</span> <b class="v">${esc(S.account)}</b></td><td><span class="lb">تاريخ بداية العمل الفعلي:</span> <b class="v">${S.startDate? fmtShort(S.startDate)+'م':''}</b></td></tr>
+    <tr><td><span class="lb">البنك:</span> <b class="v">${esc(e.bank)}</b></td><td colspan="2"><span class="lb">آيبان رقم:</span> <b class="v ltr">${esc(e.iban)}</b></td></tr>
+    <tr><td><span class="lb">دفعة شهر:</span> <b class="v">${MONTHS[m-1]} ${y}</b></td><td class="wk"><span class="lb">عدد أيام العمل:</span> <b class="v">${st.workDays}</b></td><td class="ab"><span class="lb">عدد أيام الغياب:</span> <b class="v">${st.absent}</b></td></tr>
+  </tbody></table>`;
+
+  let body = '';
+  weeks.forEach((w,wi)=>{
+    w.forEach((d,i)=>{
+      const cls0 = (i===0 && wi>0) ? 'newwk' : '';
+      if(!d){ body += `<tr class="blank ${cls0}"><td>${WD[i]}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`; return; }
+      const h = holidayOn(d);
+      if(h){
+        body += `<tr class="hol ${cls0}"><td>${WD[i]}</td><td>${fmtShort(d)}</td><td colspan="3">عطلة رسمية</td><td colspan="3">${esc(h.name)}</td><td></td></tr>`;
+        return;
+      }
+      const r = rec(d,e.id);
+      if(r && r.s==='present'){
+        body += `<tr class="${cls0}"><td>${WD[i]}</td><td>${fmtShort(d)}</td><td></td><td>${hh(S.shiftStart)}</td><td></td><td></td><td>${hh(S.shiftEnd)}</td><td></td><td></td></tr>`;
+      } else if(r){
+        body += `<tr class="abs ${cls0}"><td>${WD[i]}</td><td>${fmtShort(d)}</td><td></td><td></td><td></td><td></td><td></td><td></td><td>${ST[r.s].label}</td></tr>`;
+      } else {
+        body += `<tr class="${cls0}"><td>${WD[i]}</td><td>${fmtShort(d)}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
+      }
+    });
+  });
+  // أعمدة: اليوم | التاريخ | حضور(د س توقيع) | انصراف(د س توقيع) | ملاحظات
+  const table = `<table class="days"><colgroup><col style="width:15mm"><col style="width:22mm"><col style="width:6mm"><col style="width:15mm"><col style="width:25mm"><col style="width:6mm"><col style="width:15mm"><col style="width:25mm"><col></colgroup>
+    <thead><tr><th rowspan="2">اليوم</th><th rowspan="2">التاريخ</th><th colspan="3">وقت الحضور</th><th colspan="3">وقت الانصراف</th><th rowspan="2">ملاحظات</th></tr>
+    <tr><th>د</th><th>س</th><th>التوقيع</th><th>د</th><th>س</th><th>التوقيع</th></tr></thead><tbody>${body}</tbody></table>`;
+
+  return `<section class="sheet ind" style="--rh:${rh.toFixed(2)}mm">${logoBand('')}
+    <div style="border:.3mm solid #000;border-bottom:0;text-align:center;font-weight:800;font-size:10pt;padding:1mm 0;line-height:1.2">كشف توقيعات حضور وانصراف / تكليف مباشر - فترة مسائية بعد أوقات الدوام الرسمي - ضمن عدد ${esc(S.total)} مكلف</div>
+    ${info}${table}
+    <div class="foot"><span>اعتماد: <span class="dots"></span></span><span>اعتماد: <span class="dots"></span></span></div>
+    <div class="stamp">${pad(m)}-${y}</div></section>`;
+}
+
+/* ---- المعاينة ---- */
+function openPreview(opts){
+  const ym = ui.month, S = state.employees;
+  const pages = [], warn = [];
+  const proj = S.filter(e=>e.group==='projects'), re = S.filter(e=>e.group!=='projects');
+  const incl = [];
+  if(opts.only){
+    const e = S.find(x=>x.id===opts.only); if(e){ pages.push(sheetHTML(e,ym)); incl.push(e); }
+  } else {
+    if(opts.cons){ pages.push(consolidatedHTML(ym)); proj.forEach(e=>incl.push(e)); }
+    if(opts.projects) proj.forEach(e=>{ pages.push(sheetHTML(e,ym)); if(!incl.includes(e)) incl.push(e); });
+    if(opts.realestate) re.forEach(e=>{ pages.push(sheetHTML(e,ym)); incl.push(e); });
+  }
+  incl.forEach(e=>{ const s = stats(e.id,ym); if(s.unrec) warn.push((e.short||e.name)+' ('+s.unrec+')'); });
+  $('#preview').innerHTML = `<div class="pv-bar">
+      <button class="btn primary" data-act="doprint">طباعة / حفظ PDF</button>
+      <button class="btn" data-act="closepv">إغلاق المعاينة</button>
+      <span>${monthLabel(ym)} — ${pages.length} صفحة</span>
+      ${warn.length? `<span class="warn">⚠ أيام غير مسجّلة: ${esc(warn.join('، '))}</span>`:''}
+    </div><div class="pv-pages">${pages.join('') || '<p style="color:#fff;text-align:center">لم يتم اختيار أي صفحة للطباعة.</p>'}</div>`;
+  $('#preview').classList.add('open');
+  $('#preview').scrollTop = 0;
+}
+
+/* =====================================================================
+   الأحداث
+===================================================================== */
+document.addEventListener('click', ev=>{
+  const t = ev.target.closest('[data-tab],[data-act]'); if(!t) return;
+  if(t.dataset.tab){ ui.tab = t.dataset.tab; render(); window.scrollTo(0,0); return; }
+  const act = t.dataset.act, emp = t.dataset.emp, d = ui.date;
+  switch(act){
+    case 'prevday': ui.date = addDays(d,-1); ui.month = ui.date.slice(0,7); render(); break;
+    case 'nextday': ui.date = addDays(d, 1); ui.month = ui.date.slice(0,7); render(); break;
+    case 'today': ui.date = ymd(new Date()); ui.month = ui.date.slice(0,7); render(); break;
+    case 'goto': ui.date = t.dataset.d; render(); break;
+    case 'st': {
+      const cur = rec(d,emp);
+      if(cur && cur.s===t.dataset.v) setRec(d,emp,null);               // ضغطة ثانية = إلغاء التسجيل
+      else if(t.dataset.v==='present') setRec(d,emp,{s:'present',loc:'admin',p1:'',p2:''});
+      else setRec(d,emp,{s:t.dataset.v});
+      save(); render(); break; }
+    case 'loc': {
+      const cur = rec(d,emp) || {s:'present'};
+      setRec(d,emp,Object.assign({p1:'',p2:''},cur,{s:'present',loc:t.dataset.v}));
+      save(); render();
+      if(t.dataset.v==='site'){ const i = $(`input[data-f="p1"][data-emp="${emp}"]`); if(i) i.focus(); }
+      break; }
+    case 'allAdmin':
+      state.employees.forEach(e=>{ if(!rec(d,e.id)) setRec(d,e.id,{s:'present',loc:'admin',p1:'',p2:''}); });
+      save(); render(); toast('تم تعيين الباقي: حاضر بالإدارة'); break;
+    case 'clearDay':
+      if(confirm('مسح تسجيل هذا اليوم لجميع الموظفين؟')){ delete state.records[d]; save(); render(); } break;
+    case 'prevmonth': { const [y,m] = ui.month.split('-').map(Number); const x = new Date(y,m-2,1); ui.month = ymd(x).slice(0,7); render(); break; }
+    case 'nextmonth': { const [y,m] = ui.month.split('-').map(Number); const x = new Date(y,m,1);   ui.month = ymd(x).slice(0,7); render(); break; }
+    case 'preview': openPreview(ui.prt); break;
+    case 'printOne': openPreview({only:emp}); break;
+    case 'doprint': window.print(); break;
+    case 'closepv': $('#preview').classList.remove('open'); break;
+    case 'delhol':
+      if(confirm('حذف هذه العطلة؟')){ state.holidays = state.holidays.filter(h=>h.id!==t.dataset.id); save(); render(); } break;
+    case 'addEmp': empDialog(null); break;
+    case 'editEmp': empDialog(emp); break;
+    case 'export': {
+      const blob = new Blob([JSON.stringify(state,null,1)], {type:'application/json'});
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+      a.download = 'attendance-backup-'+ymd(new Date())+'.json'; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(a.href),1000); break; }
+    case 'reset':
+      if(confirm('سيتم مسح كل التسجيلات والعطل والإعدادات من هذا المتصفح. هل أنت متأكد؟')){
+        try{ localStorage.removeItem(KEY); }catch(e){} initState(); render(); toast('تم المسح'); } break;
+  }
+});
+
+document.addEventListener('input', ev=>{
+  const t = ev.target;
+  if(t.dataset.f){                                   // أرقام المشاريع
+    const r = rec(ui.date,t.dataset.emp); if(!r) return;
+    r[t.dataset.f] = t.value.trim(); setRec(ui.date,t.dataset.emp,r); save();
+    if(t.dataset.f==='p1'){ t.classList.toggle('need', !siteCode(r)); const hint = t.closest('.proj').querySelector('.hint'); if(hint) hint.style.display = siteCode(r)?'none':''; }
+    const card = t.closest('.emp'); card.className = 'emp s-present';
+    refreshDayBits();
+  } else if(t.dataset.set){
+    const k = t.dataset.set; state.settings[k] = (t.type==='number') ? (t.value===''? '' : Number(t.value)) : t.value; save();
+  } else if(t.id==='hStart' || t.id==='hEnd'){ updateHolCount(); }
+});
+
+document.addEventListener('change', ev=>{
+  const t = ev.target;
+  if(t.id==='datePick' && t.value){ ui.date = t.value; ui.month = t.value.slice(0,7); render(); }
+  else if(t.dataset.prt){ ui.prt[t.dataset.prt] = t.checked; }
+  else if(t.dataset.setchk){ state.settings[t.dataset.setchk] = t.checked; save(); toast('تم الحفظ'); }
+  else if(t.id==='hKind'){ $('#hNameWrap').hidden = t.value!=='__other'; }
+  else if(t.id==='importFile' && t.files[0]){
+    const fr = new FileReader();
+    fr.onload = () => {
+      try{
+        const obj = JSON.parse(fr.result);
+        if(!obj || !Array.isArray(obj.employees) || typeof obj.records!=='object') throw new Error('bad');
+        if(!confirm('سيتم استبدال البيانات الحالية بالنسخة الاحتياطية. متابعة؟')) return;
+        state = obj; initStateFix(); save(); render(); toast('تم الاسترجاع');
+      }catch(e){ alert('الملف غير صالح كنسخة احتياطية.'); }
+    };
+    fr.readAsText(t.files[0]);
+  }
+});
+function initStateFix(){ state.settings = Object.assign(defaultSettings(), state.settings||{}); state.holidays = state.holidays||[]; }
+
+function updateHolCount(){
+  const a = $('#hStart'), b = $('#hEnd'), el = $('#hCount'); if(!a||!b||!el) return;
+  if(a.value && b.value && b.value>=a.value){ const c = countDays(a.value,b.value); el.textContent = 'عدد الأيام: '+c.cal+' — منها أيام دوام (أحد–خميس): '+c.work; }
+  else el.textContent = b.value && a.value ? 'تاريخ النهاية يجب أن يكون بعد البداية' : '';
+}
+
+document.addEventListener('submit', ev=>{
+  if(ev.target.id==='holForm'){
+    ev.preventDefault();
+    const kind = $('#hKind').value, name = kind==='__other' ? $('#hName').value.trim() : kind;
+    const a = $('#hStart').value, b = $('#hEnd').value;
+    if(!name){ alert('اكتب اسم العطلة.'); return; }
+    if(!a || !b || b<a){ alert('تحقق من تاريخي البداية والنهاية.'); return; }
+    state.holidays.push({id:'h'+Date.now(), name, start:a, end:b});
+    save(); render(); toast('تمت إضافة العطلة');
+  }
+});
+
+// حوار الموظف
+$('#empDlg').addEventListener('close', ()=>{
+  const dlg = $('#empDlg');
+  if(dlg.returnValue!=='save') return;
+  const f = $('#empForm'); const fd = new FormData(f); const o = {}; fd.forEach((v,k)=> o[k] = String(v).trim());
+  if(!o.name){ return; }
+  o.id = dlg.dataset.emp;
+  const i = state.employees.findIndex(x=>x.id===o.id);
+  if(i>=0) state.employees[i] = Object.assign({}, state.employees[i], o); else state.employees.push(o);
+  save(); render(); toast('تم حفظ بيانات الموظف');
+});
+document.addEventListener('click', ev=>{
+  if(ev.target.id==='empDel'){
+    const dlg = $('#empDlg'), id = dlg.dataset.emp;
+    if(confirm('حذف الموظف؟ ستبقى تسجيلاته القديمة مخفية ولن تظهر في التقارير.')){
+      state.employees = state.employees.filter(x=>x.id!==id); save(); dlg.returnValue='cancel'; dlg.close(); render();
+    }
+  }
+});
+
+/* =====================================================================
+   بدء التشغيل
+===================================================================== */
+$('#hdrAwqaf').src = LOGO_AWQAF; $('#hdrMoe').src = LOGO_MOE;
+initState();
+$('#todayPill').textContent = fmtLong(ymd(new Date()));
+render();
+// تحديث عدّاد العطلة عند فتح صفحة العطل
+new MutationObserver(updateHolCount).observe($('#view'),{childList:true});
+window.__app = { get state(){return state;}, ui, render, stats };   // لأغراض الاختبار
+})();
+</script>
+</body>
+</html>
