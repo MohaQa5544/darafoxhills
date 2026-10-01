@@ -143,6 +143,7 @@ dialog h3{margin:0 0 12px}
 .att td,.att th{border:.3mm solid #000;text-align:center;font-size:8.5pt;padding:0 .6mm;height:var(--rh);overflow:hidden;line-height:1.1;white-space:nowrap}
 .att th{background:#f2f2f2;font-weight:800}
 .att .nmrow th{background:#e8f1ec;font-size:9.5pt;height:7mm}
+.att tr.off td{background:#d4d4d4}
 .att tr.abs td{background:#fff200;font-weight:700;font-size:8pt}
 .att tr.hol td{background:#00b0f0;font-weight:700;font-size:8pt}
 .att tr.tot td{font-weight:800;background:#f4f4f4;font-size:9.5pt}
@@ -574,7 +575,7 @@ function wkTable(e, ym){
     const wd = parse(d).getDay(), hol = holidayOn(d), r = rec(d,e.id);
     const head = `<td>${i+1}</td><td>${WD[wd]}</td><td>${fmtShort(d)}</td>`;
     if(hol) return `<tr class="hol">${head}<td colspan="3">${esc(hol.name)}</td></tr>`;
-    if(wd>4) return `<tr>${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td><td></td></tr>`;   // الجمعة والسبت تظهر كباقي الأيام: بلا توقيع ولا تُحتسب غياباً
+    if(wd>4) return `<tr class="off">${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td><td></td></tr>`;   // الجمعة والسبت تظهر كباقي الأيام: بلا توقيع ولا تُحتسب غياباً
     if(r==='absent') return `<tr class="abs">${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td><td>غياب</td></tr>`;
     if(r==='present') return `<tr>${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td>${sigCell(e,d)}</tr>`;
     return `<tr>${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td><td></td></tr>`;
