@@ -192,7 +192,7 @@ dialog h3{margin:0 0 12px}
 .ind .foot{display:flex;justify-content:space-between;margin-top:4mm;font-size:10pt}
 .ind .foot span.dots{display:inline-block;width:55mm;border-bottom:.3mm dotted #000}
 .sheet .sigc{position:relative;overflow:visible;padding:0}
-.sheet .sigc img{position:absolute;left:50%;top:50%;height:calc(var(--rh) * .70);width:auto;max-width:none;pointer-events:none}
+.sheet .sigc img{position:absolute;left:50%;top:50%;height:calc(var(--rh) * 1.05);width:auto;max-width:none;pointer-events:none}
 .sig-prev{height:46px;width:auto;border:1px dashed var(--line);border-radius:8px;padding:4px 8px;background:#fff}
 .ind .stamp{position:absolute;bottom:2mm;inset-inline-end:3mm;font-size:9pt;direction:ltr}
 
@@ -677,7 +677,7 @@ function xmur3(str){let h=1779033703^str.length;for(let i=0;i<str.length;i++){h=
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 function sigStyle(empId, date, col){
   const r = mulberry32(xmur3(empId+'|'+date+'|'+col+'|'+(state.settings.sigSalt||0))());
-  const rot = (r()*2-1)*5, sc = 1+(r()*2-1)*0.10, jx = (r()*2-1)*20, dy = (r()*2-1)*0.6;
+  const rot = (r()*2-1)*5, sc = 1+(r()*2-1)*0.10, jx = (r()*2-1)*16, dy = (r()*2-1)*1.2;
   return `left:${(50+jx).toFixed(1)}%;transform:translate(-50%,-50%) translateY(${dy.toFixed(2)}mm) rotate(${rot.toFixed(2)}deg) scale(${sc.toFixed(3)})`;
 }
 const sigUrlCache = {};
