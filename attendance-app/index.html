@@ -258,7 +258,7 @@ const SAMPLE_EMPLOYEES = [1,2,3,4,5,6,7,8].map(i=>({
 
 function defaultSettings(){
   return { orderNo:'2954-2023', requestNo:'2913-2023', account:'4211-13', reward:'5.500',
-           startDate:'2023-08-31', total:18, monthBase:30, shiftStart:2, shiftEnd:5, countPaid:true };
+           startDate:'2023-08-31', total:18, monthBase:30, shiftStart:2, shiftEnd:5, countPaid:true, weekendRule:true };
 }
 
 /* =====================================================================
@@ -329,6 +329,19 @@ const hh = h => h+':00';
 /* =====================================================================
    إحصاءات الشهر
 ===================================================================== */
+/* يوم غياب فعلي (إجازة بأي نوع) وليس عطلة رسمية؛ يعيد نوع الإجازة أو null */
+function absentType(d, empId){
+  if(holidayOn(d)) return null;
+  const r = rec(d,empId);
+  return (r && r.s!=='present') ? r.s : null;
+}
+/* هل تُحتسب الجمعة والسبت التاليتان للخميس thu؟ (غياب الخميس واستمراره الأحد، بأي نوع إجازة) */
+function weekendCounted(thu, empId){
+  if(!state.settings.weekendRule) return false;
+  const a = absentType(thu,empId), b = absentType(addDays(thu,3),empId);
+  if(!a || !b) return false;
+  return state.settings.countPaid || !(a==='paid' && b==='paid');
+}
 function stats(empId, ym){
   const s = {admin:0,site:0,paid:0,casual:0,sick:0,unrec:0,hol:0,work:0,unrecDays:[]};
   for(const d of monthDays(ym)){
@@ -339,7 +352,12 @@ function stats(empId, ym){
     if(!r){ s.unrec++; s.unrecDays.push(d); continue; }
     if(r.s==='present'){ if(r.loc==='site') s.site++; else s.admin++; } else s[r.s]++;
   }
-  s.absent = s.casual + s.sick + (state.settings.countPaid ? s.paid : 0);
+  s.wk = 0;                                   // جمعة/سبت محتسبة ضمن الغياب المتصل
+  for(const d of monthDays(ym)){
+    const wd = parse(d).getDay();
+    if((wd===5 || wd===6) && weekendCounted(addDays(d, wd===5 ? -1 : -2), empId)) s.wk++;
+  }
+  s.absent = s.casual + s.sick + (state.settings.countPaid ? s.paid : 0) + s.wk;
   s.workDays = state.settings.monthBase - s.absent;
   return s;
 }
@@ -468,7 +486,7 @@ function reportView(){
     return `<tr>
       <td class="l"><b>${esc(e.short||e.name)}</b></td>
       <td>${s.admin}</td><td>${s.site}</td><td>${s.paid}</td><td>${s.casual}</td><td>${s.sick}</td>
-      <td>${s.hol||'—'}</td>
+      <td>${s.wk||'—'}</td><td>${s.hol||'—'}</td>
       <td>${s.unrec? `<span class="tag w">${s.unrec}</span>` : '<span class="tag ok">0</span>'}</td>
       <td><b>${s.absent}</b></td><td><b>${s.workDays}</b></td>
       <td><button class="btn small" data-act="printOne" data-emp="${e.id}">طباعة</button></td></tr>`;
@@ -487,13 +505,13 @@ function reportView(){
 
   <div class="card">
     <h2>ملخص الشهر</h2>
-    <p class="muted" style="margin:0 0 10px">أيام الدوام = الأحد إلى الخميس بعد استبعاد العطل الرسمية. أيام العمل = ${state.settings.monthBase} − أيام الغياب${state.settings.countPaid?' (الإجازة براتب محسوبة ضمن الغياب)':' (الإجازة براتب غير محسوبة)'}.</p>
+    <p class="muted" style="margin:0 0 10px">أيام الدوام = الأحد إلى الخميس بعد استبعاد العطل الرسمية. أيام العمل = ${state.settings.monthBase} − أيام الغياب${state.settings.countPaid?' (الإجازة براتب محسوبة ضمن الغياب)':' (الإجازة براتب غير محسوبة)'}.${state.settings.weekendRule?' إذا غاب الموظف الخميس واستمر غيابه الأحد تُضاف الجمعة والسبت (عمود «جمعة/سبت»).':''}</p>
     <div class="tablewrap"><table class="data">
-      <thead><tr><th>الموظف</th><th>بالإدارة</th><th>بالموقع</th><th>براتب</th><th>عارضة</th><th>مرضية</th><th>عطلة</th><th>غير مسجّل</th><th>الغياب</th><th>أيام العمل</th><th></th></tr></thead>
+      <thead><tr><th>الموظف</th><th>بالإدارة</th><th>بالموقع</th><th>براتب</th><th>عارضة</th><th>مرضية</th><th>جمعة/سبت</th><th>عطلة</th><th>غير مسجّل</th><th>الغياب</th><th>أيام العمل</th><th></th></tr></thead>
       <tbody>
-        <tr><td class="l" colspan="11" style="background:#f6faf8"><b>قسم المشاريع</b></td></tr>
+        <tr><td class="l" colspan="12" style="background:#f6faf8"><b>قسم المشاريع</b></td></tr>
         ${proj.map(row).join('')}
-        ${re.length? `<tr><td class="l" colspan="11" style="background:#f6faf8"><b>قسم العقارات</b> <span class="muted">(خارج البيان المجمّع)</span></td></tr>${re.map(row).join('')}`:''}
+        ${re.length? `<tr><td class="l" colspan="12" style="background:#f6faf8"><b>قسم العقارات</b> <span class="muted">(خارج البيان المجمّع)</span></td></tr>${re.map(row).join('')}`:''}
       </tbody></table></div>
   </div>
 
@@ -568,6 +586,7 @@ function setupView(){
       ${f('monthBase','أيام الشهر المعتمدة للحساب','number')}${f('shiftStart','ساعة الحضور (رقم)','number')}${f('shiftEnd','ساعة الانصراف (رقم)','number')}
     </div>
     <label style="display:flex;gap:8px;align-items:center;margin-top:14px"><input type="checkbox" data-setchk="countPaid" ${s.countPaid?'checked':''}> احتساب «الإجازة براتب» ضمن أيام الغياب</label>
+    <label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px"><input type="checkbox" data-setchk="weekendRule" ${s.weekendRule?'checked':''}> <span>احتساب الجمعة والسبت كأيام غياب إذا غاب الموظف يوم الخميس واستمر غيابه يوم الأحد (حتى لو اختلف نوع الإجازة)</span></label>
   </div>
 
   <div class="card">
@@ -689,7 +708,7 @@ function sheetHTML(e, ym){
       if(r && r.s==='present'){
         body += `<tr class="${cls0}"><td>${WD[i]}</td><td>${fmtShort(d)}</td><td></td><td>${hh(S.shiftStart)}</td><td></td><td></td><td>${hh(S.shiftEnd)}</td><td></td><td></td></tr>`;
       } else if(r){
-        body += `<tr class="abs ${cls0}"><td>${WD[i]}</td><td>${fmtShort(d)}</td><td></td><td></td><td></td><td></td><td></td><td></td><td>${ST[r.s].label}</td></tr>`;
+        body += `<tr class="abs ${cls0}"><td>${WD[i]}</td><td>${fmtShort(d)}</td><td></td><td></td><td></td><td></td><td></td><td></td><td>${ST[r.s].label}${(i===0 && weekendCounted(addDays(d,-3), e.id)) ? ' (+ الجمعة والسبت)' : ''}</td></tr>`;
       } else {
         body += `<tr class="${cls0}"><td>${WD[i]}</td><td>${fmtShort(d)}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
       }
