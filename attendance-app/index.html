@@ -181,7 +181,8 @@ dialog h3{margin:0 0 12px}
 .ind .info td b.v{font-weight:800}
 .ind .info td.ab{background:#fff200}
 .ind .info td.wk{background:#e4f1d4}
-.ind .days{margin-top:0}
+.ind .days{margin-top:0;table-layout:fixed}
+.ind .days td:last-child{font-size:8pt;line-height:1.1;padding:0 1mm}
 .ind .days th{background:#f2f2f2;font-size:9pt;height:5.4mm}
 .ind .days td{height:var(--rh);font-size:9.5pt}
 .ind .days tr.newwk td{border-top-width:.7mm}
@@ -190,6 +191,9 @@ dialog h3{margin:0 0 12px}
 .ind .days tr.blank td{background:#fff}
 .ind .foot{display:flex;justify-content:space-between;margin-top:4mm;font-size:10pt}
 .ind .foot span.dots{display:inline-block;width:55mm;border-bottom:.3mm dotted #000}
+.sheet .sigc{position:relative;overflow:visible;padding:0}
+.sheet .sigc img{position:absolute;left:50%;top:50%;height:calc(var(--rh) * .70);width:auto;max-width:none;pointer-events:none}
+.sig-prev{height:46px;width:auto;border:1px dashed var(--line);border-radius:8px;padding:4px 8px;background:#fff}
 .ind .stamp{position:absolute;bottom:2mm;inset-inline-end:3mm;font-size:9pt;direction:ltr}
 
 @media print{
@@ -261,7 +265,7 @@ const SAMPLE_EMPLOYEES = [1,2,3,4,5,6,7,8].map(i=>({
 
 function defaultSettings(){
   return { orderNo:'2954-2023', requestNo:'2913-2023', account:'4211-13', reward:'5.500',
-           startDate:'2023-08-31', total:18, monthBase:30, shiftStart:2, shiftEnd:5, countPaid:true, weekendRule:true };
+           startDate:'2023-08-31', total:18, monthBase:30, shiftStart:2, shiftEnd:5, countPaid:true, weekendRule:true, sigSalt:0 };
 }
 
 /* =====================================================================
@@ -299,6 +303,10 @@ function initState(){
               records: L? L.records : {}, holidays:[] };
     dirty = true;
   } else dirty = migrate(state, L);
+  if(L && L.employees) L.employees.forEach(se => {            // توقيعات مُحمَّلة من البيانات المحلية لمن ليس له توقيع محفوظ
+    const e = state.employees.find(x=>x.id===se.id);
+    if(se.sig && e && !e.sig){ e.sig = se.sig; dirty = true; }
+  });
   initStateFix();
   if(dirty) save();
 }
@@ -383,7 +391,7 @@ function stats(empId, ym){
    الواجهة العامة
 ===================================================================== */
 const ui = { tab:'day', date: ymd(new Date()), month: ymd(new Date()).slice(0,7),
-             prt:{cons:true, projects:true, realestate:true} };
+             prt:{cons:true, projects:true, realestate:true, sigs:true} };
 
 function render(){
   $$('#tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab===ui.tab)));
@@ -545,6 +553,8 @@ function reportView(){
       <label><input type="checkbox" data-prt="cons" ${p.cons?'checked':''}> البيان المجمّع للمشاريع</label>
       <label><input type="checkbox" data-prt="projects" ${p.projects?'checked':''}> كشوف مهندسي المشاريع</label>
       <label><input type="checkbox" data-prt="realestate" ${p.realestate?'checked':''}> كشوف قسم العقارات</label>
+      <label><input type="checkbox" data-prt="sigs" ${p.sigs?'checked':''}> إدراج التواقيع الإلكترونية (لمن لديه توقيع)</label>
+      <button class="btn small" data-act="resalt">تغيير أشكال التواقيع</button>
     </div>
     <button class="btn primary" data-act="preview">معاينة وطباعة التقرير</button>
   </div>`;
@@ -623,6 +633,7 @@ function setupView(){
   </div>`;
 }
 
+let dlgSig = null;   // null = دون تغيير، '' = حذف، غير ذلك = توقيع جديد
 function empDialog(id){
   const e = state.employees.find(x=>x.id===id) || {id:'e'+Date.now(), group:'projects', dept:'الاستثمار', section:'المشاريع'};
   const isNew = !state.employees.some(x=>x.id===e.id);
@@ -639,19 +650,84 @@ function empDialog(id){
       ${F('idCard','رقم البطاقة الشخصية','ltr')}${F('empNo','الموظف (رقم)','ltr')}${F('jobNo','الوظيفة (رقم)','ltr')}
       ${F('bank','البنك')}${F('iban','آيبان رقم','ltr')}
     </div>
+    <div class="field" style="margin-top:12px"><label>التوقيع الإلكتروني (اختياري)</label>
+      <div class="row">
+        <img id="sigPrev" class="sig-prev" alt="التوقيع" ${e.sig?`src="${e.sig}"`:'hidden'}>
+        <label class="btn small" style="cursor:pointer">رفع صورة التوقيع <input type="file" id="sigFile" accept="image/*" hidden></label>
+        <button class="btn small danger" type="button" id="sigDel">حذف التوقيع</button>
+      </div>
+      <small class="muted">يُدرج في خانتي التوقيع بأيام الحضور مع تدوير وتكبير طفيفين عشوائيين. استخدم توقيعك الشخصي، أو توقيع من وافق صراحةً على ذلك.</small>
+    </div>
     <div class="row" style="margin-top:16px">
       <button class="btn primary" value="save" id="empSave">حفظ</button>
       <button class="btn" value="cancel" formnovalidate>إلغاء</button>
       <div class="grow"></div>
       ${isNew?'':'<button class="btn danger" type="button" id="empDel">حذف الموظف</button>'}
     </div></form>`;
-  dlg.dataset.emp = e.id; dlg.dataset.isnew = isNew ? '1':'';
+  dlgSig = null; dlg.dataset.emp = e.id; dlg.dataset.isnew = isNew ? '1':'';
   dlg.showModal();
 }
 
 /* =====================================================================
    النماذج المطبوعة
 ===================================================================== */
+/* ---- التوقيع الإلكتروني: تدوير ±5° وتكبير/تصغير ±10% يختلف لكل خانة ويثبت عند إعادة الطباعة ---- */
+let printSigs = false;
+function xmur3(str){let h=1779033703^str.length;for(let i=0;i<str.length;i++){h=Math.imul(h^str.charCodeAt(i),3432918353);h=h<<13|h>>>19;}return function(){h=Math.imul(h^(h>>>16),2246822507);h=Math.imul(h^(h>>>13),3266489909);return(h^=h>>>16)>>>0;};}
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function sigStyle(empId, date, col){
+  const r = mulberry32(xmur3(empId+'|'+date+'|'+col+'|'+(state.settings.sigSalt||0))());
+  const rot = (r()*2-1)*5, sc = 1+(r()*2-1)*0.10, jx = (r()*2-1)*20, dy = (r()*2-1)*0.6;
+  return `left:${(50+jx).toFixed(1)}%;transform:translate(-50%,-50%) translateY(${dy.toFixed(2)}mm) rotate(${rot.toFixed(2)}deg) scale(${sc.toFixed(3)})`;
+}
+const sigUrlCache = {};
+function sigUrl(e){
+  const c = sigUrlCache[e.id]; if(c && c.src===e.sig) return c.url;
+  const bin = atob(e.sig.split(',')[1]); const arr = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) arr[i] = bin.charCodeAt(i);
+  const url = URL.createObjectURL(new Blob([arr],{type:'image/png'})); sigUrlCache[e.id] = {src:e.sig,url}; return url;
+}
+function sigCell(e, d, col){
+  if(!printSigs || !e.sig) return '<td></td>';
+  return `<td class="sigc"><img src="${sigUrl(e)}" alt="" style="${sigStyle(e.id,d,col)}"></td>`;
+}
+/* تجهيز صورة التوقيع: إزالة الخلفية البيضاء، قصّ الأطراف، وتصغيرها */
+function processSignature(file){
+  return new Promise((res,rej)=>{
+    const fr = new FileReader();
+    fr.onerror = rej;
+    fr.onload = ()=>{
+      const img = new Image();
+      img.onerror = rej;
+      img.onload = ()=>{
+        const sc = Math.min(1, 600/img.width), w = Math.max(1,Math.round(img.width*sc)), h = Math.max(1,Math.round(img.height*sc));
+        const c = document.createElement('canvas'); c.width = w; c.height = h;
+        const x = c.getContext('2d'); x.drawImage(img,0,0,w,h);
+        const id = x.getImageData(0,0,w,h), a = id.data;
+        let hasAlpha = false; for(let i=3;i<a.length;i+=4){ if(a[i]<250){ hasAlpha = true; break; } }
+        let x0=w,y0=h,x1=0,y1=0;
+        for(let i=0;i<a.length;i+=4){
+          if(!hasAlpha){                                   // خلفية بيضاء → شفافة (الشفافية من درجة الغمق)
+            const al = Math.min(255, (255-Math.min(a[i],a[i+1],a[i+2]))*1.15), k = Math.max(al/255,0.004);
+            a[i]   = Math.max(0,Math.min(255,(a[i]  -255*(1-k))/k));
+            a[i+1] = Math.max(0,Math.min(255,(a[i+1]-255*(1-k))/k));
+            a[i+2] = Math.max(0,Math.min(255,(a[i+2]-255*(1-k))/k));
+            a[i+3] = al;
+          }
+          if(a[i+3]>20){ const p = i/4, px = p%w, py = (p/w)|0; if(px<x0)x0=px; if(px>x1)x1=px; if(py<y0)y0=py; if(py>y1)y1=py; }
+        }
+        if(x1<x0){ rej(new Error('empty')); return; }
+        x.putImageData(id,0,0);
+        const cw = x1-x0+1, ch = y1-y0+1, o = document.createElement('canvas'); o.width = cw; o.height = ch;
+        o.getContext('2d').drawImage(c,x0,y0,cw,ch,0,0,cw,ch);
+        res(o.toDataURL('image/png'));
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
+}
+
 function logoBand(mid){
   return `<div class="band"><img src="${LOGO_AWQAF}" alt=""><div class="mid">${mid||''}</div><img src="${LOGO_MOE}" alt=""></div>`;
 }
@@ -730,7 +806,7 @@ function sheetHTML(e, ym){
       }
       const r = rec(d,e.id);
       if(r && (r.s==='present' || !r.ea)){
-        body += `<tr class="${cls0}"><td>${WD[i]}</td><td>${fmtShort(d)}</td><td></td><td>${hh(S.shiftStart)}</td><td></td><td></td><td>${hh(S.shiftEnd)}</td><td></td><td>${r.s==='present' ? '' : ST[r.s].label+' (حضور مسائي)'}</td></tr>`;
+        body += `<tr class="${cls0}"><td>${WD[i]}</td><td>${fmtShort(d)}</td><td></td><td>${hh(S.shiftStart)}</td>${sigCell(e,d,'in')}<td></td><td>${hh(S.shiftEnd)}</td>${sigCell(e,d,'out')}<td>${r.s==='present' ? '' : ST[r.s].label+' (حضور مسائي)'}</td></tr>`;
       } else if(r){
         body += `<tr class="abs ${cls0}"><td>${WD[i]}</td><td>${fmtShort(d)}</td><td></td><td></td><td></td><td></td><td></td><td></td><td>${ST[r.s].label}${(i===0 && weekendCounted(addDays(d,-3), e.id)) ? ' (+ الجمعة والسبت)' : ''}</td></tr>`;
       } else {
@@ -739,7 +815,7 @@ function sheetHTML(e, ym){
     });
   });
   // أعمدة: اليوم | التاريخ | حضور(د س توقيع) | انصراف(د س توقيع) | ملاحظات
-  const table = `<table class="days"><colgroup><col style="width:15mm"><col style="width:22mm"><col style="width:6mm"><col style="width:15mm"><col style="width:25mm"><col style="width:6mm"><col style="width:15mm"><col style="width:25mm"><col></colgroup>
+  const table = `<table class="days"><colgroup><col style="width:14mm"><col style="width:19mm"><col style="width:4mm"><col style="width:11mm"><col style="width:44mm"><col style="width:4mm"><col style="width:11mm"><col style="width:44mm"><col></colgroup>
     <thead><tr><th rowspan="2">اليوم</th><th rowspan="2">التاريخ</th><th colspan="3">وقت الحضور</th><th colspan="3">وقت الانصراف</th><th rowspan="2">ملاحظات</th></tr>
     <tr><th>د</th><th>س</th><th>التوقيع</th><th>د</th><th>س</th><th>التوقيع</th></tr></thead><tbody>${body}</tbody></table>`;
 
@@ -752,6 +828,7 @@ function sheetHTML(e, ym){
 
 /* ---- المعاينة ---- */
 function openPreview(opts){
+  printSigs = !!ui.prt.sigs;
   const ym = ui.month, S = state.employees;
   const pages = [], warn = [];
   const proj = S.filter(e=>e.group==='projects'), re = S.filter(e=>e.group!=='projects');
@@ -799,6 +876,7 @@ document.addEventListener('click', ev=>{
       if(t.dataset.v==='site'){ const i = $(`input[data-f="p1"][data-emp="${emp}"]`); if(i) i.focus(); }
       break; }
     case 'eve': { const cur = rec(d,emp); if(cur && cur.s!=='present'){ cur.ea = (t.dataset.v==='absent'); setRec(d,emp,cur); save(); render(); } break; }
+    case 'resalt': state.settings.sigSalt = (state.settings.sigSalt||0)+1; save(); toast('تم تغيير أشكال التواقيع — افتح المعاينة من جديد'); break;
     case 'allAdmin':
       state.employees.forEach(e=>{ if(!rec(d,e.id)) setRec(d,e.id,{s:'present',loc:'admin',p1:'',p2:''}); });
       save(); render(); toast('تم تعيين الباقي: حاضر بالإدارة'); break;
@@ -844,6 +922,10 @@ document.addEventListener('change', ev=>{
   else if(t.dataset.prt){ ui.prt[t.dataset.prt] = t.checked; }
   else if(t.dataset.setchk){ state.settings[t.dataset.setchk] = t.checked; save(); toast('تم الحفظ'); }
   else if(t.id==='hKind'){ $('#hNameWrap').hidden = t.value!=='__other'; }
+  else if(t.id==='sigFile' && t.files[0]){
+    processSignature(t.files[0]).then(u=>{ dlgSig = u; const im = $('#sigPrev'); im.src = u; im.hidden = false; }).catch(()=>alert('تعذّرت قراءة صورة التوقيع، جرّب صورة أخرى.'));
+    t.value = '';
+  }
   else if(t.id==='importFile' && t.files[0]){
     const fr = new FileReader();
     fr.onload = () => {
@@ -885,10 +967,13 @@ $('#empDlg').addEventListener('close', ()=>{
   if(!o.name){ return; }
   o.id = dlg.dataset.emp;
   const i = state.employees.findIndex(x=>x.id===o.id);
-  if(i>=0) state.employees[i] = Object.assign({}, state.employees[i], o); else state.employees.push(o);
+  const merged = i>=0 ? Object.assign({}, state.employees[i], o) : o;
+  if(dlgSig==='') delete merged.sig; else if(dlgSig) merged.sig = dlgSig;
+  if(i>=0) state.employees[i] = merged; else state.employees.push(merged);
   save(); render(); toast('تم حفظ بيانات الموظف');
 });
 document.addEventListener('click', ev=>{
+  if(ev.target.id==='sigDel'){ dlgSig = ''; const im = $('#sigPrev'); im.hidden = true; im.removeAttribute('src'); }
   if(ev.target.id==='empDel'){
     const dlg = $('#empDlg'), id = dlg.dataset.emp;
     if(confirm('حذف الموظف؟ ستبقى تسجيلاته القديمة مخفية ولن تظهر في التقارير.')){
