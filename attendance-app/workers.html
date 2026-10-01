@@ -1,0 +1,714 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>إدارة الحضور والانصراف — عمال قسم العقارات</title>
+<style>
+:root{
+  color-scheme: light;
+  --green:#0b6b4c; --maroon:#8a1538;
+  --bg:#f3f6f4; --card:#fff; --ink:#1b2a25; --muted:#586661; --line:#d5dfdb;
+  --ok:#17803f; --ok-bg:#e2f4e8; --bad:#a8243b; --bad-bg:#fbe5e9;
+  --hol:#1a7fb0; --hol-bg:#d7eefa; --warn:#9a5b00; --warn-bg:#fff4dc;
+  --radius:12px;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font-family:"Segoe UI",Tahoma,"Noto Sans Arabic","Noto Naskh Arabic","DejaVu Sans",Arial,sans-serif;background:var(--bg);color:var(--ink);font-size:16px;line-height:1.55}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:3px solid #f0a500;outline-offset:2px}
+
+/* ---------- header ---------- */
+.app-head{background:#fff;border-bottom:4px solid var(--green);display:flex;align-items:center;gap:18px;padding:10px 22px;flex-wrap:wrap}
+.app-head .logos{display:flex;gap:16px;align-items:center;direction:ltr}
+.app-head .logos img{height:50px;width:auto;display:block}
+.app-head .logos .sep{width:1px;height:42px;background:var(--line)}
+.app-head h1{margin:0;font-size:24px;color:var(--green);line-height:1.25}
+.app-head p{margin:2px 0 0;color:var(--muted);font-size:15px}
+.grow{flex:1}
+.today-pill{background:var(--ok-bg);color:var(--green);border-radius:999px;padding:6px 14px;font-weight:600;font-size:14px;white-space:nowrap}
+nav.tabs{display:flex;gap:2px;background:#fff;padding:0 14px;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20;overflow-x:auto}
+nav.tabs button{border:0;background:none;padding:13px 18px;border-bottom:3px solid transparent;color:var(--muted);white-space:nowrap;font-weight:600}
+nav.tabs button:hover{color:var(--green)}
+nav.tabs button[aria-selected=true]{color:var(--green);border-bottom-color:var(--green)}
+main{max-width:1000px;margin:0 auto;padding:18px 16px 60px}
+h2{font-size:20px;margin:0 0 4px}
+.muted{color:var(--muted)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:16px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+
+.btn{border:1px solid var(--line);background:#fff;border-radius:10px;padding:9px 16px;font-weight:600;min-height:42px}
+.btn:hover{border-color:var(--green);color:var(--green)}
+.btn.primary{background:var(--green);border-color:var(--green);color:#fff}
+.btn.primary:hover{background:#08573d;color:#fff}
+.btn.danger{color:var(--bad);border-color:#e6b9c2}
+.btn.small{padding:5px 12px;min-height:34px;font-size:14px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* ---------- day view ---------- */
+.daybar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.daybar .date-title{font-size:22px;font-weight:800;color:var(--green);min-width:260px;text-align:center;flex:1}
+.daybar input[type=date]{border:1px solid var(--line);border-radius:10px;padding:8px 10px;min-height:42px;background:#fff}
+.strip{display:flex;flex-wrap:wrap;gap:5px;margin-top:12px}
+.chip{width:38px;border:1px solid var(--line);background:#fff;border-radius:9px;padding:3px 0 4px;text-align:center;line-height:1.15}
+.chip small{display:block;font-size:10px;color:var(--muted)}
+.chip b{font-size:15px}
+.chip.done{background:var(--ok-bg);border-color:#9bd3ad}
+.chip.part{background:var(--warn-bg);border-color:#ecc57a}
+.chip.off{background:#eef0ef;color:#97a19d}
+.chip.hol{background:var(--hol-bg);border-color:#8fcbe6}
+.chip.sel{outline:3px solid var(--green);outline-offset:1px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin-top:8px}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid var(--line);vertical-align:-1px;margin-inline-end:4px}
+.banner{border-radius:10px;padding:10px 14px;margin-bottom:12px;font-weight:600}
+.banner.off{background:#eef0ef;color:#4b5753}
+.banner.hol{background:var(--hol-bg);color:#0d5578}
+.banner.warn{background:var(--warn-bg);color:var(--warn)}
+.emp{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;margin-bottom:10px;display:grid;grid-template-columns:220px 1fr;gap:10px 16px;align-items:center}
+.emp.s-present{border-inline-start:6px solid var(--ok)}
+.emp.s-absent{border-inline-start:6px solid var(--bad)}
+.emp.s-none{border-inline-start:6px solid #c6cfcb}
+.emp .nm b{display:block;font-size:18px}
+.emp .nm small{color:var(--muted)}
+.seg{display:flex;flex-wrap:wrap;gap:8px}
+.seg button{border:1.5px solid var(--line);background:#fff;border-radius:10px;padding:10px 26px;min-height:46px;font-weight:700;font-size:17px;min-width:120px}
+.seg button:hover{border-color:#8aa89d}
+.seg button[aria-pressed=true]{color:#fff;border-color:transparent}
+.seg button[data-v=present][aria-pressed=true]{background:var(--ok)}
+.seg button[data-v=absent][aria-pressed=true]{background:var(--bad)}
+.disabled-list{opacity:.45;pointer-events:none}
+.daysum{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 2px}
+.daysum span{background:#fff;border:1px solid var(--line);border-radius:999px;padding:3px 12px;font-size:14px}
+@media (max-width:640px){ .emp{grid-template-columns:1fr} }
+
+table.data{width:100%;border-collapse:collapse;background:#fff;font-size:15px}
+table.data th,table.data td{border:1px solid var(--line);padding:7px 6px;text-align:center}
+table.data th{background:#eef5f1;font-weight:700;line-height:1.25}
+table.data td.l{text-align:start;white-space:nowrap}
+table.data tr.sum td{background:#f6faf8;font-weight:800}
+.tablewrap{overflow-x:auto;border-radius:10px}
+.tag{display:inline-block;border-radius:999px;padding:1px 10px;font-size:13px;font-weight:700}
+.tag.w{background:var(--warn-bg);color:var(--warn)}
+.tag.ok{background:var(--ok-bg);color:var(--ok)}
+.field{display:flex;flex-direction:column;gap:4px}
+.field label{font-size:14px;color:var(--muted);font-weight:600}
+.field input,.field select{border:1px solid var(--line);border-radius:9px;padding:9px 10px;min-height:42px;background:#fff;width:100%}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+dialog{border:0;border-radius:14px;padding:0;width:min(720px,94vw);box-shadow:0 20px 60px rgba(0,0,0,.35)}
+dialog::backdrop{background:rgba(10,30,22,.45)}
+dialog form{padding:18px}
+dialog h3{margin:0 0 12px}
+.ltr{direction:ltr;text-align:right}
+.sig-prev{height:46px;width:auto;border:1px dashed var(--line);border-radius:8px;padding:4px 8px;background:#fff}
+.toast{position:fixed;bottom:18px;inset-inline-start:18px;background:#1b2a25;color:#fff;padding:10px 18px;border-radius:10px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:99}
+.toast.show{opacity:.95}
+
+/* ---------- print preview ---------- */
+#preview{position:fixed;inset:0;background:#6b7773;overflow:auto;z-index:100;display:none}
+#preview.open{display:block}
+.pv-bar{position:sticky;top:0;z-index:5;background:#16241f;color:#fff;padding:10px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.pv-bar .btn{min-height:38px}
+.pv-bar .warn{background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:4px 12px;font-size:14px}
+.pv-pages{padding:20px 0}
+.sheet{width:194mm;height:280mm;background:#fff;margin:0 auto 18px;box-shadow:0 4px 24px rgba(0,0,0,.35);overflow:hidden;color:#000;position:relative;font-family:"Segoe UI",Tahoma,"Noto Sans Arabic","DejaVu Sans",Arial,sans-serif}
+.sheet .band{display:flex;justify-content:space-between;align-items:center;direction:ltr;height:17mm;padding:0 1mm}
+.sheet .band img{height:15mm;width:auto;display:block}
+.sheet table{border-collapse:collapse;width:100%}
+.sheet .sigc{position:relative;overflow:visible;padding:0}
+.sheet .sigc img{position:absolute;left:50%;top:50%;height:calc(var(--rh) * .72);width:auto;max-width:none;pointer-events:none}
+
+/* page 1: transfer sheet */
+.xfer .ttl{border:.3mm solid #000;text-align:center;font-weight:800;font-size:15pt;padding:2.5mm 0;margin:3mm 0 4mm;background:#e8f1ec}
+.xfer table{margin-bottom:5mm}
+.xfer td,.xfer th{border:.3mm solid #000;text-align:center;padding:2mm 1.2mm;font-size:10.5pt;line-height:1.25}
+.xfer th{background:#f2f2f2;font-weight:800}
+.xfer .info td{font-weight:800;font-size:12pt}
+.xfer .info th{font-size:9.5pt}
+.xfer .bank td{background:#d9ead3;font-weight:800;font-size:12.5pt}
+.xfer td.ib{direction:ltr;font-size:9.5pt;letter-spacing:.1px}
+.xfer td.nm{text-align:right;padding-inline:3mm;font-weight:700}
+.xfer tr.tot td{font-weight:800;background:#f2f2f2;font-size:12pt}
+.xfer .sigs{display:grid;grid-template-columns:1fr 1fr;gap:16mm 24mm;margin-top:18mm;padding:0 8mm}
+.xfer .sigs div{text-align:center;font-weight:800;font-size:12pt}
+.xfer .sigs .line{border-bottom:.3mm dotted #000;margin:15mm 6mm 0}
+.xfer .note{font-size:9pt;margin-top:3mm}
+
+/* page 2: attendance tables */
+.att .ttl{text-align:center;font-weight:800;font-size:13pt;margin:1mm 0 2.5mm}
+.att .pair{display:flex;gap:4mm}
+.att .wt{flex:1;min-width:0}
+.att table{table-layout:fixed}
+.att td,.att th{border:.3mm solid #000;text-align:center;font-size:8.5pt;padding:0 .6mm;height:var(--rh);overflow:hidden;line-height:1.1;white-space:nowrap}
+.att th{background:#f2f2f2;font-weight:800}
+.att .nmrow th{background:#e8f1ec;font-size:9.5pt;height:7mm}
+.att tr.abs td{background:#fff200;font-weight:700}
+.att tr.hol td{background:#00b0f0;font-weight:700}
+.att tr.tot td{font-weight:800;background:#f4f4f4;font-size:9.5pt}
+.att.single td,.att.single th{font-size:10pt}
+.att .foot{display:flex;justify-content:space-between;margin-top:3mm;font-size:10pt}
+.att .foot span.dots{display:inline-block;width:55mm;border-bottom:.3mm dotted #000}
+
+@media print{
+  @page{size:A4 portrait;margin:8mm}
+  html,body{background:#fff}
+  body > *:not(#preview){display:none !important}
+  #preview{position:static;background:#fff;overflow:visible;display:block}
+  .pv-bar{display:none !important}
+  .pv-pages{padding:0}
+  .sheet{box-shadow:none;margin:0;break-after:page;page-break-after:always}
+  .sheet:last-child{break-after:auto;page-break-after:auto}
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}
+</style>
+</head>
+<body>
+
+<header class="app-head">
+  <div class="logos"><img id="hdrAwqaf" alt="الإدارة العامة للأوقاف"><span class="sep"></span><img id="hdrMoe" alt="وزارة الأوقاف والشؤون الإسلامية"></div>
+  <div>
+    <h1>إدارة الحضور والانصراف</h1>
+    <p>عمال مجمعات الأوقاف - قسم إدارة العقارات - إدارة الاستثمار</p>
+  </div>
+  <div class="grow"></div>
+  <div class="today-pill" id="todayPill"></div>
+</header>
+
+<nav class="tabs" role="tablist" id="tabs">
+  <button role="tab" data-tab="day">الإدخال اليومي</button>
+  <button role="tab" data-tab="report">التقرير الشهري والطباعة</button>
+  <button role="tab" data-tab="holidays">العطل الرسمية</button>
+  <button role="tab" data-tab="setup">العمال والإعدادات</button>
+</nav>
+
+<main id="view"></main>
+<dialog id="empDlg"></dialog>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div id="preview" aria-label="معاينة الطباعة"></div>
+
+<script src="logos.js"></script>
+<script src="workers.local.js" onerror="void 0"></script>
+<script>
+(function(){
+'use strict';
+
+/* =====================================================================
+   ثوابت
+===================================================================== */
+const KEY = 'workers_attendance_v1';
+const WD = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
+const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+const HOL_PRESETS = ['عيد الفطر السعيد','عيد الأضحى المبارك','اليوم الوطني','اليوم الرياضي'];
+
+const SAMPLE_EMPLOYEES = [1,2].map(i=>({
+  id:'w'+i, name:'عامل تجريبي '+i, short:'عامل '+i, benef:'عامل تجريبي '+i, waqf:String(1000+i),
+  bank:'—', iban:'QA00XXXX000000000000000000000'
+}));
+function defaultSettings(){
+  return { dailyWage:200, monthBase:30, transferTitle:'مكافآت مجمعات الأوقاف', sigSalt:0 };
+}
+
+/* =====================================================================
+   الحالة والتخزين
+===================================================================== */
+let state = null, storageOk = true;
+function load(){ try{ const raw = localStorage.getItem(KEY); if(raw) return JSON.parse(raw); }catch(e){ storageOk = false; } return null; }
+function save(){
+  try{ localStorage.setItem(KEY, JSON.stringify(state)); storageOk = true; }
+  catch(e){ storageOk = false; toast('تعذّر الحفظ في المتصفح — استخدم «نسخة احتياطية» من صفحة الإعدادات'); }
+}
+function initStateFix(){
+  state.settings = Object.assign(defaultSettings(), state.settings||{});
+  state.holidays = state.holidays || []; state.records = state.records || {};
+}
+function initState(){
+  const L = window.WORKERS_DATA;
+  state = load(); let dirty = false;
+  if(!state){
+    state = { v:1, settings:Object.assign(defaultSettings(), (L&&L.settings)||{}), employees: L? L.employees : SAMPLE_EMPLOYEES,
+              records: (L&&L.records)||{}, holidays:[] };
+    dirty = true;
+  }
+  if(L && L.employees) L.employees.forEach(se => {                      // توقيعات مُحمَّلة من البيانات المحلية لمن ليس له توقيع محفوظ
+    const e = state.employees.find(x=>x.id===se.id);
+    if(se.sig && e && !e.sig){ e.sig = se.sig; dirty = true; }
+  });
+  initStateFix();
+  if(dirty) save();
+}
+
+/* =====================================================================
+   أدوات
+===================================================================== */
+const $ = (s,el)=> (el||document).querySelector(s);
+const $$ = (s,el)=> Array.from((el||document).querySelectorAll(s));
+const pad = n => String(n).padStart(2,'0');
+const ymd = d => d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+const parse = s => { const [y,m,d] = s.split('-').map(Number); return new Date(y,m-1,d); };
+const addDays = (s,n) => { const d = parse(s); d.setDate(d.getDate()+n); return ymd(d); };
+const isWork = s => parse(s).getDay() <= 4;                  // الأحد–الخميس
+const fmtLong = s => { const d = parse(s); return WD[d.getDay()]+' '+d.getDate()+' '+MONTHS[d.getMonth()]+' '+d.getFullYear(); };
+const fmtShort = s => { const d = parse(s); return d.getDate()+'/'+(d.getMonth()+1)+'/'+d.getFullYear(); };
+const monthLabel = ym => { const [y,m] = ym.split('-').map(Number); return MONTHS[m-1]+' '+y; };
+const money = n => Number(n).toLocaleString('en-US', {maximumFractionDigits:2});
+const esc = t => String(t==null?'':t).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function monthDays(ym){ const [y,m] = ym.split('-').map(Number); const n = new Date(y,m,0).getDate(); return Array.from({length:n},(_,i)=> ym+'-'+pad(i+1)); }
+function holidayOn(s){ return state.holidays.find(h => h.start <= s && s <= h.end) || null; }
+function rec(d,emp){ return (state.records[d] && state.records[d][emp]) || null; }
+function setRec(d,emp,val){
+  if(!state.records[d]) state.records[d] = {};
+  if(val) state.records[d][emp] = val; else delete state.records[d][emp];
+  if(!Object.keys(state.records[d]).length) delete state.records[d];
+}
+function toast(msg){ const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast._t); toast._t = setTimeout(()=>t.classList.remove('show'),2200); }
+
+/* =====================================================================
+   الاحتساب
+   - أيام الدوام = الأحد–الخميس بعد استبعاد العطل الرسمية؛ الجمعة والسبت لا تُحتسب غياباً أبداً.
+   - أيام الغياب = أيام الدوام المسجّلة «غائب» فقط (بلا إضافة الجمعة والسبت).
+   - إن غاب العامل كل أيام الدوام في الشهر = غياب الشهر كاملاً ولا أجر له.
+   - أيام الاستحقاق = أيام الشهر المعتمدة (30) − أيام الغياب، والأجر = الأيام × الأجر اليومي.
+===================================================================== */
+function stats(empId, ym){
+  const S = state.settings, base = Number(S.monthBase)||30, wage = Number(S.dailyWage)||0;
+  const s = {present:0, absent:0, unrec:0, hol:0, work:0, unrecDays:[]};
+  for(const d of monthDays(ym)){
+    if(!isWork(d)) continue;
+    if(holidayOn(d)){ s.hol++; continue; }
+    s.work++;
+    const r = rec(d,empId);
+    if(!r){ s.unrec++; s.unrecDays.push(d); } else if(r==='present') s.present++; else s.absent++;
+  }
+  s.fullMonth = s.work>0 && s.absent===s.work;                 // غاب كل أيام الدوام
+  s.absentDays = s.fullMonth ? base : s.absent;
+  s.paidDays = Math.max(0, base - s.absentDays);
+  s.wage = wage; s.amount = s.paidDays * wage;
+  return s;
+}
+
+/* =====================================================================
+   الواجهة
+===================================================================== */
+const ui = { tab:'day', date: ymd(new Date()), month: ymd(new Date()).slice(0,7), prt:{xfer:true, att:true, separate:false, sigs:true} };
+
+function render(){
+  $$('#tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab===ui.tab)));
+  const v = $('#view');
+  v.innerHTML = ui.tab==='day' ? dayView() : ui.tab==='report' ? reportView() : ui.tab==='holidays' ? holidaysView() : setupView();
+}
+
+/* ---------- 1) الإدخال اليومي ---------- */
+function dayView(){
+  const d = ui.date, wd = parse(d).getDay(), hol = holidayOn(d), off = wd>4, blocked = off || !!hol;
+  let banner = '';
+  if(off) banner = `<div class="banner off">${WD[wd]}: لا يُسجَّل فيه حضور ولا يُحتسب غياباً.</div>`;
+  else if(hol) banner = `<div class="banner hol">عطلة رسمية: ${esc(hol.name)} (${fmtShort(hol.start)} ← ${fmtShort(hol.end)}) — لا يُسجَّل حضور.</div>`;
+  return `
+  <div class="card">
+    <div class="daybar">
+      <button class="btn" data-act="prevday">→ اليوم السابق</button>
+      <div class="date-title">${fmtLong(d)}</div>
+      <button class="btn" data-act="nextday">اليوم التالي ←</button>
+    </div>
+    <div class="row" style="margin-top:10px;justify-content:center">
+      <input type="date" id="datePick" value="${d}" aria-label="اختيار التاريخ">
+      <button class="btn small" data-act="today">اليوم</button>
+    </div>
+    ${monthStrip(d)}
+  </div>
+  ${banner}
+  <div class="${blocked?'disabled-list':''}">
+    <div class="row" style="margin:0 2px 8px">
+      <div class="daysum" id="daysum">${daySummary(d)}</div><div class="grow"></div>
+      <button class="btn small" data-act="allPresent" ${blocked?'disabled':''}>تعيين الباقي: حاضر</button>
+      <button class="btn small danger" data-act="clearDay" ${blocked?'disabled':''}>مسح تسجيل اليوم</button>
+    </div>
+    ${state.employees.map(e=>empCard(e,d)).join('')}
+  </div>
+  <p class="muted" style="margin-top:14px">يُحفظ كل تغيير تلقائياً في هذا المتصفح. خذ نسخة احتياطية من صفحة «العمال والإعدادات» بشكل دوري.${storageOk?'':' <b style="color:var(--bad)">⚠ التخزين غير متاح الآن.</b>'}</p>`;
+}
+function monthStrip(d){
+  const ym = d.slice(0,7);
+  const chips = monthDays(ym).map(x=>{
+    const wd = parse(x).getDay(), h = holidayOn(x); let cls = '', title = '';
+    if(wd>4) cls = 'off'; else if(h){ cls='hol'; title = h.name; }
+    else { const n = state.employees.filter(e=>rec(x,e.id)).length; cls = n===0 ? '' : (n>=state.employees.length ? 'done':'part'); }
+    if(x===d) cls += ' sel';
+    return `<button class="chip ${cls}" data-act="goto" data-d="${x}" title="${esc(title)}"><small>${WD[wd].slice(0,3)}</small><b>${+x.slice(8)}</b></button>`;
+  }).join('');
+  return `<div class="strip" aria-label="أيام الشهر">${chips}</div>
+  <div class="legend"><span><i style="background:var(--ok-bg)"></i>مكتمل التسجيل</span><span><i style="background:var(--warn-bg)"></i>تسجيل جزئي</span><span><i style="background:#fff"></i>لم يُسجَّل</span><span><i style="background:#eef0ef"></i>جمعة/سبت</span><span><i style="background:var(--hol-bg)"></i>عطلة رسمية</span></div>`;
+}
+function empCard(e,d){
+  const r = rec(d,e.id), cls = r ? 's-'+r : 's-none';
+  const btn = (v,label) => `<button data-act="st" data-emp="${e.id}" data-v="${v}" aria-pressed="${r===v}">${label}</button>`;
+  return `<div class="emp ${cls}"><div class="nm"><b>${esc(e.short||e.name)}</b><small>الوقف رقم ${esc(e.waqf||'')}</small></div>
+    <div class="seg" role="group" aria-label="الحالة">${btn('present','حاضر')}${btn('absent','غائب')}</div></div>`;
+}
+function daySummary(d){
+  let p=0,a=0,u=0; state.employees.forEach(e=>{ const r = rec(d,e.id); if(!r) u++; else if(r==='present') p++; else a++; });
+  return `<span>حاضر: <b>${p}</b></span><span>غائب: <b>${a}</b></span><span>لم يُسجَّل: <b>${u}</b></span>`;
+}
+
+/* ---------- 2) التقرير الشهري ---------- */
+function reportView(){
+  const ym = ui.month, p = ui.prt;
+  const rows = state.employees.map(e=>({e, s:stats(e.id,ym)}));
+  const total = rows.reduce((n,x)=>n+x.s.amount,0), unrec = rows.reduce((n,x)=>n+x.s.unrec,0);
+  return `
+  <div class="card">
+    <div class="daybar">
+      <button class="btn" data-act="prevmonth">→ الشهر السابق</button>
+      <div class="date-title">${monthLabel(ym)}</div>
+      <button class="btn" data-act="nextmonth">الشهر التالي ←</button>
+    </div>
+    ${unrec? `<div class="banner warn" style="margin:12px 0 0">يوجد ${unrec} خانة حضور لم تُسجَّل في أيام الدوام لهذا الشهر — تظهر فارغة في الطباعة ولا تُحتسب غياباً.</div>`:''}
+  </div>
+  <div class="card">
+    <h2>ملخص الشهر</h2>
+    <p class="muted" style="margin:0 0 10px">الغياب = أيام الدوام (الأحد–الخميس) المسجّلة «غائب» فقط، والجمعة والسبت لا تُحتسب غياباً. إذا غاب العامل كل أيام الدوام في الشهر يُعتبر غياب الشهر كاملاً ولا أجر له. أيام الاستحقاق = ${state.settings.monthBase} − أيام الغياب.</p>
+    <div class="tablewrap"><table class="data">
+      <thead><tr><th>العامل</th><th>حاضر</th><th>غائب</th><th>عطلة رسمية</th><th>غير مسجّل</th><th>أيام الغياب</th><th>أيام الاستحقاق</th><th>الأجر اليومي</th><th>المبلغ (ر.ق)</th></tr></thead>
+      <tbody>${rows.map(({e,s})=>`<tr><td class="l"><b>${esc(e.short||e.name)}</b>${s.fullMonth?' <span class="tag w">غياب الشهر كاملاً</span>':''}</td>
+        <td>${s.present}</td><td>${s.absent}</td><td>${s.hol||'—'}</td>
+        <td>${s.unrec? `<span class="tag w">${s.unrec}</span>` : '<span class="tag ok">0</span>'}</td>
+        <td><b>${s.absentDays}</b></td><td><b>${s.paidDays}</b></td><td>${money(s.wage)}</td><td><b>${money(s.amount)}</b></td></tr>`).join('')}
+        <tr class="sum"><td class="l" colspan="8">إجمالي المبلغ المطلوب تحويله</td><td>${money(total)}</td></tr>
+      </tbody></table></div>
+  </div>
+  <div class="card">
+    <h2>الطباعة</h2>
+    <p class="muted" style="margin:0 0 10px">صفحتان: ① كشف التحويل (معلومات الشهر والمبلغ المطلوب تحويله) ② جدول الحضور والانصراف للعاملين.</p>
+    <div class="row" style="gap:18px;margin-bottom:12px">
+      <label><input type="checkbox" data-prt="xfer" ${p.xfer?'checked':''}> كشف التحويل</label>
+      <label><input type="checkbox" data-prt="att" ${p.att?'checked':''}> جدول الحضور والانصراف</label>
+      <label><input type="checkbox" data-prt="separate" ${p.separate?'checked':''}> كل عامل في صفحة مستقلة</label>
+      <label><input type="checkbox" data-prt="sigs" ${p.sigs?'checked':''}> إدراج التواقيع الإلكترونية (لمن لديه توقيع)</label>
+      <button class="btn small" data-act="resalt">تغيير أشكال التواقيع</button>
+    </div>
+    <button class="btn primary" data-act="preview">معاينة وطباعة التقرير</button>
+  </div>`;
+}
+
+/* ---------- 3) العطل الرسمية ---------- */
+function countDays(a,b){ let cal=0, work=0; for(let d=a; d<=b; d=addDays(d,1)){ cal++; if(isWork(d)) work++; } return {cal,work}; }
+function holidaysView(){
+  const list = state.holidays.slice().sort((a,b)=> a.start<b.start?-1:1), today = ymd(new Date());
+  return `
+  <div class="card">
+    <h2>إضافة عطلة رسمية</h2>
+    <p class="muted" style="margin:0 0 12px">تُطبَّق على جميع العمال: لا يُسجَّل فيها حضور، وتظهر باللون الأزرق في الجدول، ولا تُحسب غياباً.</p>
+    <form id="holForm" class="grid2">
+      <div class="field"><label for="hKind">العطلة</label>
+        <select id="hKind">${HOL_PRESETS.map(n=>`<option>${n}</option>`).join('')}<option value="__other">أخرى (اكتب الاسم)…</option></select></div>
+      <div class="field" id="hNameWrap" hidden><label for="hName">اسم العطلة</label><input id="hName" placeholder="مثال: يوم حداد وطني"></div>
+      <div class="field"><label for="hStart">من تاريخ</label><input type="date" id="hStart" value="${today}" required></div>
+      <div class="field"><label for="hEnd">إلى تاريخ</label><input type="date" id="hEnd" value="${today}" required></div>
+      <div class="field" style="justify-content:flex-end"><div id="hCount" class="muted" style="min-height:24px"></div><button class="btn primary" type="submit">إضافة العطلة</button></div>
+    </form>
+  </div>
+  <div class="card">
+    <h2>العطل المسجّلة</h2>
+    ${list.length? `<div class="tablewrap"><table class="data"><thead><tr><th>العطلة</th><th>من</th><th>إلى</th><th>الأيام</th><th>منها أيام دوام</th><th></th></tr></thead><tbody>
+      ${list.map(h=>{ const c = countDays(h.start,h.end); return `<tr><td class="l"><b>${esc(h.name)}</b></td><td>${fmtShort(h.start)}</td><td>${fmtShort(h.end)}</td><td>${c.cal}</td><td>${c.work}</td><td><button class="btn small danger" data-act="delhol" data-id="${h.id}">حذف</button></td></tr>`; }).join('')}
+      </tbody></table></div>` : '<p class="muted">لا توجد عطل مسجّلة.</p>'}
+  </div>`;
+}
+
+/* ---------- 4) العمال والإعدادات ---------- */
+function setupView(){
+  const s = state.settings;
+  const f = (k,label,type) => `<div class="field"><label for="s_${k}">${label}</label><input id="s_${k}" data-set="${k}" type="${type||'text'}" value="${esc(s[k])}"></div>`;
+  return `
+  <div class="card">
+    <div class="row"><h2 class="grow">العمال</h2><button class="btn primary small" data-act="addEmp">+ إضافة عامل</button></div>
+    <div class="tablewrap"><table class="data"><thead><tr><th>الاسم</th><th>رقم الوقف</th><th>البنك</th><th>الآيبان</th><th>التوقيع</th><th></th></tr></thead><tbody>
+    ${state.employees.map(e=>`<tr><td class="l"><b>${esc(e.name)}</b></td><td>${esc(e.waqf||'')}</td><td>${esc(e.bank||'')}</td><td class="ltr" style="font-size:13px">${esc(e.iban||'')}</td>
+      <td>${e.sig?'<span class="tag ok">مضاف</span>':'—'}</td><td><button class="btn small" data-act="editEmp" data-emp="${e.id}">تعديل</button></td></tr>`).join('')}
+    </tbody></table></div>
+  </div>
+  <div class="card">
+    <h2>الأجر والتحويل</h2>
+    <div class="grid2" style="margin-top:10px">${f('dailyWage','قيمة الأجر اليومي (ر.ق)','number')}${f('monthBase','أيام الشهر المعتمدة للحساب','number')}${f('transferTitle','عنوان كشف التحويل')}</div>
+  </div>
+  <div class="card">
+    <h2>النسخ الاحتياطي</h2>
+    <p class="muted" style="margin:0 0 10px">البيانات محفوظة داخل هذا المتصفح فقط. حمّل نسخة احتياطية بعد كل تسجيل مهم، ويمكنك استرجاعها على أي جهاز.</p>
+    <div class="row">
+      <button class="btn" data-act="export">تنزيل نسخة احتياطية</button>
+      <label class="btn" style="cursor:pointer">استرجاع نسخة <input type="file" id="importFile" accept="application/json,.json" hidden></label>
+      <button class="btn danger" data-act="reset">مسح كل البيانات</button>
+    </div>
+  </div>`;
+}
+let dlgSig = null;   // null = دون تغيير، '' = حذف، غير ذلك = توقيع جديد
+function empDialog(id){
+  const e = state.employees.find(x=>x.id===id) || {id:'w'+Date.now()};
+  const isNew = !state.employees.some(x=>x.id===e.id);
+  const F = (k,label,cls) => `<div class="field"><label for="d_${k}">${label}</label><input id="d_${k}" name="${k}" value="${esc(e[k]||'')}" class="${cls||''}"></div>`;
+  const dlg = $('#empDlg');
+  dlg.innerHTML = `<form method="dialog" id="empForm">
+    <h3>${isNew?'إضافة عامل':'تعديل بيانات العامل'}</h3>
+    <div class="grid2">
+      ${F('name','الاسم الكامل (يظهر في جدول الحضور)')}${F('short','الاسم المختصر')}${F('benef','اسم المستفيد في كشف التحويل')}
+      ${F('waqf','رقم الوقف (يظهر في كل صف)','ltr')}${F('bank','البنك')}${F('iban','رقم الحساب (آيبان)','ltr')}
+    </div>
+    <div class="field" style="margin-top:12px"><label>التوقيع الإلكتروني (اختياري)</label>
+      <div class="row">
+        <img id="sigPrev" class="sig-prev" alt="التوقيع" ${e.sig?`src="${e.sig}"`:'hidden'}>
+        <label class="btn small" style="cursor:pointer">رفع صورة التوقيع <input type="file" id="sigFile" accept="image/*" hidden></label>
+        <button class="btn small danger" type="button" id="sigDel">حذف التوقيع</button>
+      </div>
+      <small class="muted">يُدرج في خانة التوقيع بأيام الحضور مع تدوير وتكبير طفيفين عشوائيين. استخدم توقيعك الشخصي، أو توقيع من وافق صراحةً على ذلك.</small>
+    </div>
+    <div class="row" style="margin-top:16px">
+      <button class="btn primary" value="save" id="empSave">حفظ</button>
+      <button class="btn" value="cancel" formnovalidate>إلغاء</button><div class="grow"></div>
+      ${isNew?'':'<button class="btn danger" type="button" id="empDel">حذف العامل</button>'}
+    </div></form>`;
+  dlgSig = null; dlg.dataset.emp = e.id; dlg.showModal();
+}
+
+/* =====================================================================
+   التوقيع الإلكتروني (تدوير ±5° وتكبير/تصغير ±10% وإزاحة تختلف لكل خانة ويثبت عند إعادة الطباعة)
+===================================================================== */
+let printSigs = false;
+function xmur3(str){let h=1779033703^str.length;for(let i=0;i<str.length;i++){h=Math.imul(h^str.charCodeAt(i),3432918353);h=h<<13|h>>>19;}return function(){h=Math.imul(h^(h>>>16),2246822507);h=Math.imul(h^(h>>>13),3266489909);return(h^=h>>>16)>>>0;};}
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function sigStyle(empId, date){
+  const r = mulberry32(xmur3(empId+'|'+date+'|'+(state.settings.sigSalt||0))());
+  const rot = (r()*2-1)*5, sc = 1+(r()*2-1)*0.10, jx = (r()*2-1)*8, dy = (r()*2-1)*0.9;
+  return `left:${(47+jx).toFixed(1)}%;transform:translate(-50%,-50%) translateY(${dy.toFixed(2)}mm) rotate(${rot.toFixed(2)}deg) scale(${sc.toFixed(3)})`;
+}
+const sigUrlCache = {};
+function sigUrl(e){
+  const c = sigUrlCache[e.id]; if(c && c.src===e.sig) return c.url;
+  const bin = atob(e.sig.split(',')[1]); const arr = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) arr[i] = bin.charCodeAt(i);
+  const url = URL.createObjectURL(new Blob([arr],{type:'image/png'})); sigUrlCache[e.id] = {src:e.sig,url}; return url;
+}
+function sigCell(e, d){
+  if(!printSigs || !e.sig) return '<td></td>';
+  return `<td class="sigc"><img src="${sigUrl(e)}" alt="" style="${sigStyle(e.id,d)}"></td>`;
+}
+function processSignature(file){
+  return new Promise((res,rej)=>{
+    const fr = new FileReader(); fr.onerror = rej;
+    fr.onload = ()=>{
+      const img = new Image(); img.onerror = rej;
+      img.onload = ()=>{
+        const sc = Math.min(1, 600/img.width), w = Math.max(1,Math.round(img.width*sc)), h = Math.max(1,Math.round(img.height*sc));
+        const c = document.createElement('canvas'); c.width = w; c.height = h;
+        const x = c.getContext('2d'); x.drawImage(img,0,0,w,h);
+        const id = x.getImageData(0,0,w,h), a = id.data;
+        let hasAlpha = false; for(let i=3;i<a.length;i+=4){ if(a[i]<250){ hasAlpha = true; break; } }
+        let x0=w,y0=h,x1=0,y1=0;
+        for(let i=0;i<a.length;i+=4){
+          if(!hasAlpha){
+            const al = Math.min(255, (255-Math.min(a[i],a[i+1],a[i+2]))*1.15), k = Math.max(al/255,0.004);
+            a[i]   = Math.max(0,Math.min(255,(a[i]  -255*(1-k))/k));
+            a[i+1] = Math.max(0,Math.min(255,(a[i+1]-255*(1-k))/k));
+            a[i+2] = Math.max(0,Math.min(255,(a[i+2]-255*(1-k))/k));
+            a[i+3] = al;
+          }
+          if(a[i+3]>20){ const p = i/4, px = p%w, py = (p/w)|0; if(px<x0)x0=px; if(px>x1)x1=px; if(py<y0)y0=py; if(py>y1)y1=py; }
+        }
+        if(x1<x0){ rej(new Error('empty')); return; }
+        x.putImageData(id,0,0);
+        const cw = x1-x0+1, ch = y1-y0+1, o = document.createElement('canvas'); o.width = cw; o.height = ch;
+        o.getContext('2d').drawImage(c,x0,y0,cw,ch,0,0,cw,ch);
+        res(o.toDataURL('image/png'));
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
+}
+
+/* =====================================================================
+   النماذج المطبوعة
+===================================================================== */
+function logoBand(){ return `<div class="band"><img src="${LOGO_AWQAF}" alt=""><span></span><img src="${LOGO_MOE}" alt=""></div>`; }
+
+/* ---- الورقة 1: كشف التحويل + معلومات الشهر ---- */
+function xferHTML(ym){
+  const S = state.settings, emps = state.employees, st = {};
+  emps.forEach(e => st[e.id] = stats(e.id,ym));
+  const total = emps.reduce((n,e)=>n+st[e.id].amount,0);
+  const days = monthDays(ym).length;
+  const banks = []; emps.forEach(e => { const b = e.bank||'—'; if(!banks.includes(b)) banks.push(b); });
+  let n = 0;
+  const bankTables = banks.map(b=>{
+    const list = emps.filter(e => (e.bank||'—')===b), sub = list.reduce((x,e)=>x+st[e.id].amount,0);
+    return `<table><thead><tr class="bank"><td colspan="6">${esc(b)}</td></tr>
+      <tr><th style="width:8mm">م</th><th>المستفيد</th><th style="width:20mm">أيام الاستحقاق</th><th style="width:17mm">أيام الغياب</th><th style="width:24mm">القيمة</th><th style="width:58mm">رقم الحساب</th></tr></thead><tbody>
+      ${list.map(e=>`<tr><td>${++n}</td><td class="nm">${esc(e.benef||e.name)}</td><td>${st[e.id].paidDays}</td><td>${st[e.id].absentDays}</td><td><b>${money(st[e.id].amount)}</b></td><td class="ib">${esc(e.iban||'')}</td></tr>`).join('')}
+      <tr class="tot"><td colspan="4">الإجمالي</td><td>${money(sub)}</td><td></td></tr></tbody></table>`;
+  }).join('');
+  return `<section class="sheet xfer">${logoBand()}
+    <div class="ttl">${esc(S.transferTitle)} ${monthLabel(ym)}</div>
+    <table class="info"><thead><tr><th>الشهر</th><th>عدد أيام الشهر</th><th>أيام الشهر المعتمدة للحساب</th><th>الأجر اليومي (ر.ق)</th><th>عدد العمال</th><th>إجمالي المبلغ المطلوب تحويله (ر.ق)</th></tr></thead>
+      <tbody><tr><td>${monthLabel(ym)}</td><td>${days}</td><td>${S.monthBase}</td><td>${money(S.dailyWage)}</td><td>${emps.length}</td><td>${money(total)}</td></tr></tbody></table>
+    ${bankTables}
+    ${banks.length>1? `<table><tbody><tr class="tot"><td>المجموع الكلي</td><td style="width:60mm">${money(total)}</td></tr></tbody></table>`:''}
+    <div class="sigs">
+      <div>المدقق المالي<div class="line"></div></div>
+      <div>رئيس قسم إدارة العقارات<div class="line"></div></div>
+      <div></div>
+      <div>مدير إدارة الاستثمار<div class="line"></div></div>
+    </div>
+  </section>`;
+}
+
+/* ---- الورقة 2: جدول الحضور والانصراف ---- */
+function wkTable(e, ym){
+  const s = stats(e.id,ym);
+  const rows = monthDays(ym).map((d,i)=>{
+    const wd = parse(d).getDay(), hol = holidayOn(d), r = rec(d,e.id);
+    const head = `<td>${i+1}</td><td>${WD[wd]}</td><td>${fmtShort(d)}</td>`;
+    if(hol) return `<tr class="hol">${head}<td colspan="3">${esc(hol.name)}</td></tr>`;
+    if(wd>4) return `<tr>${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td><td></td></tr>`;   // الجمعة والسبت تظهر كباقي الأيام ولا تُحتسب غياباً
+    if(r==='absent') return `<tr class="abs">${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td><td>غياب</td></tr>`;
+    if(r==='present') return `<tr>${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td>${sigCell(e,d)}</tr>`;
+    return `<tr>${head}<td>مسائي</td><td>${esc(e.waqf||'')}</td><td></td></tr>`;
+  }).join('');
+  return `<div class="wt"><table>
+    <colgroup><col style="width:6%"><col style="width:14%"><col style="width:19%"><col style="width:14%"><col style="width:13%"><col></colgroup>
+    <thead><tr class="nmrow"><th colspan="6">اسم الموظف: ${esc(e.name)}</th></tr>
+    <tr><th>م</th><th>اليوم</th><th>التاريخ</th><th>الدوام</th><th>الوقف</th><th>التوقيع</th></tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot>
+      <tr class="tot"><td colspan="4">عدد أيام الغياب</td><td colspan="2">${s.absentDays}${s.fullMonth?' (غياب الشهر كاملاً)':''}</td></tr>
+      <tr class="tot"><td colspan="4">إجمالي عدد الأيام</td><td colspan="2">${s.paidDays}</td></tr>
+      <tr class="tot"><td colspan="4">قيمة الأجر اليومي</td><td colspan="2">${money(s.wage)}</td></tr>
+      <tr class="tot"><td colspan="4">إجمالي أجر العامل الشهري</td><td colspan="2">${money(s.amount)}</td></tr>
+    </tfoot></table></div>`;
+}
+function attHTML(list, ym){
+  const n = monthDays(ym).length, rh = Math.min(7.6, 232/(n+4));
+  return `<section class="sheet att ${list.length===1?'single':''}" style="--rh:${rh.toFixed(2)}mm">${logoBand()}
+    <div class="ttl">بيانات أجور العمال عن شهر ${monthLabel(ym)} م</div>
+    <div class="pair">${list.map(e=>wkTable(e,ym)).join('')}</div>
+  </section>`;
+}
+
+function openPreview(){
+  printSigs = !!ui.prt.sigs;
+  const ym = ui.month, emps = state.employees, pages = [], warn = [];
+  if(ui.prt.xfer) pages.push(xferHTML(ym));
+  if(ui.prt.att){
+    const per = ui.prt.separate ? 1 : 2;
+    for(let i=0;i<emps.length;i+=per) pages.push(attHTML(emps.slice(i,i+per), ym));
+  }
+  emps.forEach(e=>{ const s = stats(e.id,ym); if(s.unrec) warn.push((e.short||e.name)+' ('+s.unrec+')'); });
+  $('#preview').innerHTML = `<div class="pv-bar">
+      <button class="btn primary" data-act="doprint">طباعة / حفظ PDF</button>
+      <button class="btn" data-act="closepv">إغلاق المعاينة</button>
+      <span>${monthLabel(ym)} — ${pages.length} صفحة</span>
+      ${warn.length? `<span class="warn">⚠ أيام غير مسجّلة: ${esc(warn.join('، '))}</span>`:''}
+    </div><div class="pv-pages">${pages.join('') || '<p style="color:#fff;text-align:center">لم يتم اختيار أي صفحة للطباعة.</p>'}</div>`;
+  $('#preview').classList.add('open'); $('#preview').scrollTop = 0;
+}
+
+/* =====================================================================
+   الأحداث
+===================================================================== */
+document.addEventListener('click', ev=>{
+  if(ev.target.id==='sigDel'){ dlgSig = ''; const im = $('#sigPrev'); im.hidden = true; im.removeAttribute('src'); return; }
+  if(ev.target.id==='empDel'){
+    const dlg = $('#empDlg'), id = dlg.dataset.emp;
+    if(confirm('حذف العامل؟ ستبقى تسجيلاته القديمة مخفية ولن تظهر في التقارير.')){ state.employees = state.employees.filter(x=>x.id!==id); save(); dlg.returnValue='cancel'; dlg.close(); render(); }
+    return;
+  }
+  const t = ev.target.closest('[data-tab],[data-act]'); if(!t) return;
+  if(t.dataset.tab){ ui.tab = t.dataset.tab; render(); window.scrollTo(0,0); return; }
+  const act = t.dataset.act, emp = t.dataset.emp, d = ui.date;
+  switch(act){
+    case 'prevday': ui.date = addDays(d,-1); ui.month = ui.date.slice(0,7); render(); break;
+    case 'nextday': ui.date = addDays(d, 1); ui.month = ui.date.slice(0,7); render(); break;
+    case 'today': ui.date = ymd(new Date()); ui.month = ui.date.slice(0,7); render(); break;
+    case 'goto': ui.date = t.dataset.d; render(); break;
+    case 'st': { const cur = rec(d,emp); setRec(d,emp, cur===t.dataset.v ? null : t.dataset.v); save(); render(); break; }   // ضغطة ثانية = إلغاء التسجيل
+    case 'allPresent': state.employees.forEach(e=>{ if(!rec(d,e.id)) setRec(d,e.id,'present'); }); save(); render(); toast('تم تعيين الباقي: حاضر'); break;
+    case 'clearDay': if(confirm('مسح تسجيل هذا اليوم لجميع العمال؟')){ delete state.records[d]; save(); render(); } break;
+    case 'prevmonth': { const [y,m] = ui.month.split('-').map(Number); ui.month = ymd(new Date(y,m-2,1)).slice(0,7); render(); break; }
+    case 'nextmonth': { const [y,m] = ui.month.split('-').map(Number); ui.month = ymd(new Date(y,m,1)).slice(0,7); render(); break; }
+    case 'preview': openPreview(); break;
+    case 'doprint': window.print(); break;
+    case 'closepv': $('#preview').classList.remove('open'); break;
+    case 'resalt': state.settings.sigSalt = (state.settings.sigSalt||0)+1; save(); toast('تم تغيير أشكال التواقيع — افتح المعاينة من جديد'); break;
+    case 'delhol': if(confirm('حذف هذه العطلة؟')){ state.holidays = state.holidays.filter(h=>h.id!==t.dataset.id); save(); render(); } break;
+    case 'addEmp': empDialog(null); break;
+    case 'editEmp': empDialog(emp); break;
+    case 'export': {
+      const blob = new Blob([JSON.stringify(state,null,1)], {type:'application/json'});
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'workers-backup-'+ymd(new Date())+'.json';
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); break; }
+    case 'reset': if(confirm('سيتم مسح كل التسجيلات والعطل والإعدادات من هذا المتصفح. هل أنت متأكد؟')){ try{ localStorage.removeItem(KEY); }catch(e){} initState(); render(); toast('تم المسح'); } break;
+  }
+});
+document.addEventListener('input', ev=>{
+  const t = ev.target;
+  if(t.dataset.set){ const k = t.dataset.set; state.settings[k] = (t.type==='number') ? (t.value===''? '' : Number(t.value)) : t.value; save(); }
+  else if(t.id==='hStart' || t.id==='hEnd') updateHolCount();
+});
+document.addEventListener('change', ev=>{
+  const t = ev.target;
+  if(t.id==='datePick' && t.value){ ui.date = t.value; ui.month = t.value.slice(0,7); render(); }
+  else if(t.dataset.prt){ ui.prt[t.dataset.prt] = t.checked; }
+  else if(t.id==='hKind'){ $('#hNameWrap').hidden = t.value!=='__other'; }
+  else if(t.id==='sigFile' && t.files[0]){
+    processSignature(t.files[0]).then(u=>{ dlgSig = u; const im = $('#sigPrev'); im.src = u; im.hidden = false; }).catch(()=>alert('تعذّرت قراءة صورة التوقيع، جرّب صورة أخرى.'));
+    t.value = '';
+  }
+  else if(t.id==='importFile' && t.files[0]){
+    const fr = new FileReader();
+    fr.onload = () => { try{
+      const obj = JSON.parse(fr.result);
+      if(!obj || !Array.isArray(obj.employees) || typeof obj.records!=='object') throw new Error('bad');
+      if(!confirm('سيتم استبدال البيانات الحالية بالنسخة الاحتياطية. متابعة؟')) return;
+      state = obj; initStateFix(); save(); render(); toast('تم الاسترجاع');
+    }catch(e){ alert('الملف غير صالح كنسخة احتياطية.'); } };
+    fr.readAsText(t.files[0]);
+  }
+});
+function updateHolCount(){
+  const a = $('#hStart'), b = $('#hEnd'), el = $('#hCount'); if(!a||!b||!el) return;
+  if(a.value && b.value && b.value>=a.value){ const c = countDays(a.value,b.value); el.textContent = 'عدد الأيام: '+c.cal+' — منها أيام دوام (أحد–خميس): '+c.work; }
+  else el.textContent = b.value && a.value ? 'تاريخ النهاية يجب أن يكون بعد البداية' : '';
+}
+document.addEventListener('submit', ev=>{
+  if(ev.target.id==='holForm'){
+    ev.preventDefault();
+    const kind = $('#hKind').value, name = kind==='__other' ? $('#hName').value.trim() : kind, a = $('#hStart').value, b = $('#hEnd').value;
+    if(!name){ alert('اكتب اسم العطلة.'); return; }
+    if(!a || !b || b<a){ alert('تحقق من تاريخي البداية والنهاية.'); return; }
+    state.holidays.push({id:'h'+Date.now(), name, start:a, end:b}); save(); render(); toast('تمت إضافة العطلة');
+  }
+});
+$('#empDlg').addEventListener('close', ()=>{
+  const dlg = $('#empDlg'); if(dlg.returnValue!=='save') return;
+  const fd = new FormData($('#empForm')), o = {}; fd.forEach((v,k)=> o[k] = String(v).trim());
+  if(!o.name) return;
+  o.id = dlg.dataset.emp;
+  const i = state.employees.findIndex(x=>x.id===o.id);
+  const merged = i>=0 ? Object.assign({}, state.employees[i], o) : o;
+  if(dlgSig==='') delete merged.sig; else if(dlgSig) merged.sig = dlgSig;
+  if(i>=0) state.employees[i] = merged; else state.employees.push(merged);
+  save(); render(); toast('تم حفظ بيانات العامل');
+});
+
+/* =====================================================================
+   بدء التشغيل
+===================================================================== */
+$('#hdrAwqaf').src = LOGO_AWQAF; $('#hdrMoe').src = LOGO_MOE;
+initState();
+$('#todayPill').textContent = fmtLong(ymd(new Date()));
+render();
+new MutationObserver(updateHolCount).observe($('#view'),{childList:true});
+window.__app = { get state(){return state;}, ui, render, stats };   // لأغراض الاختبار
+})();
+</script>
+</body>
+</html>
