@@ -101,6 +101,8 @@ h2{font-size:20px;margin:0 0 4px}
 .seg button[data-v=admin][aria-pressed=true]{background:#2f6f8f}
 .seg button[data-v=site][aria-pressed=true]{background:var(--maroon)}
 .seg.second button{padding:6px 14px;min-height:38px;font-size:15px}
+.seg button[data-v=absent][aria-pressed=true]{background:var(--sick)}
+.evlbl{align-self:center;font-weight:700;color:var(--muted);font-size:14px;margin-inline-end:2px}
 .proj{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .proj label{display:flex;align-items:center;gap:6px;font-size:14px;color:var(--muted)}
 .proj input{width:110px;border:1.5px solid var(--line);border-radius:9px;padding:7px 10px;min-height:40px;text-align:center;font-size:17px;font-weight:700;color:var(--ink);direction:ltr}
@@ -117,6 +119,7 @@ table.data th,table.data td{border:1px solid var(--line);padding:7px 8px;text-al
 table.data th{background:#eef5f1;font-weight:700;white-space:nowrap}
 table.data td.l{text-align:start;white-space:nowrap}
 #view table.data th,#view table.data td{padding:7px 6px}
+#view table.data th{white-space:normal;line-height:1.25;font-size:14px}
 .tablewrap{overflow-x:auto;border-radius:10px}
 .tag{display:inline-block;border-radius:999px;padding:1px 10px;font-size:13px;font-weight:700}
 .tag.w{background:var(--warn-bg);color:var(--warn)}
@@ -275,17 +278,29 @@ function save(){
   try{ localStorage.setItem(KEY, JSON.stringify(state)); storageOk = true; }
   catch(e){ storageOk = false; toast('تعذّر الحفظ في المتصفح — استخدم «نسخة احتياطية» من صفحة الإعدادات'); }
 }
-function initState(){
-  state = load();
-  if(!state){
-    const L = window.LOCAL_DATA;
-    state = { v:1, settings:defaultSettings(), employees: L? L.employees : SAMPLE_EMPLOYEES,
-              records: L? L.records : {}, holidays:[] };
-    save();
+const DATA_VERSION = 2;
+/* v1 → v2: كانت الإجازة تعني غياباً مسائياً كاملاً، فنحفظ هذا المعنى بالحقل ea (غياب مسائي).
+   ويُحدَّث الأيام المحمّلة من ملف الحضور الأصلي (بيانات سبتمبر) لتفرّق بين «إجازة + حضور مسائي» و«غياب مسائي». */
+function migrate(st, seed){
+  if((st.v||1) >= DATA_VERSION) return false;
+  Object.values(st.records||{}).forEach(day => Object.values(day).forEach(r => { if(r.s!=='present' && r.ea===undefined) r.ea = true; }));
+  if(seed && seed.records){
+    st.records = st.records || {};
+    Object.entries(seed.records).forEach(([d,m]) => { st.records[d] = st.records[d] || {};
+      Object.entries(m).forEach(([id,r]) => { st.records[d][id] = Object.assign({}, r); }); });
   }
-  state.settings = Object.assign(defaultSettings(), state.settings||{});
-  state.holidays = state.holidays || [];
-  state.records = state.records || {};
+  st.v = DATA_VERSION; return true;
+}
+function initState(){
+  const L = window.LOCAL_DATA;
+  state = load(); let dirty = false;
+  if(!state){
+    state = { v:DATA_VERSION, settings:defaultSettings(), employees: L? L.employees : SAMPLE_EMPLOYEES,
+              records: L? L.records : {}, holidays:[] };
+    dirty = true;
+  } else dirty = migrate(state, L);
+  initStateFix();
+  if(dirty) save();
 }
 
 /* =====================================================================
@@ -329,11 +344,11 @@ const hh = h => h+':00';
 /* =====================================================================
    إحصاءات الشهر
 ===================================================================== */
-/* يوم غياب فعلي (إجازة بأي نوع) وليس عطلة رسمية؛ يعيد نوع الإجازة أو null */
+/* يوم غياب مسائي فعلي (إجازة + «غائب مساءً») وليس عطلة رسمية؛ يعيد نوع الإجازة أو null */
 function absentType(d, empId){
   if(holidayOn(d)) return null;
   const r = rec(d,empId);
-  return (r && r.s!=='present') ? r.s : null;
+  return (r && r.s!=='present' && r.ea) ? r.s : null;
 }
 /* هل تُحتسب الجمعة والسبت التاليتان للخميس thu؟ (غياب الخميس واستمراره الأحد، بأي نوع إجازة) */
 function weekendCounted(thu, empId){
@@ -343,21 +358,23 @@ function weekendCounted(thu, empId){
   return state.settings.countPaid || !(a==='paid' && b==='paid');
 }
 function stats(empId, ym){
-  const s = {admin:0,site:0,paid:0,casual:0,sick:0,unrec:0,hol:0,work:0,unrecDays:[]};
+  const s = {admin:0,site:0,lp:0,aPaid:0,aCasual:0,aSick:0,unrec:0,hol:0,work:0,unrecDays:[]};
   for(const d of monthDays(ym)){
     if(!isWork(d)) continue;
     if(holidayOn(d)){ s.hol++; continue; }
     s.work++;
     const r = rec(d,empId);
     if(!r){ s.unrec++; s.unrecDays.push(d); continue; }
-    if(r.s==='present'){ if(r.loc==='site') s.site++; else s.admin++; } else s[r.s]++;
+    if(r.s==='present'){ if(r.loc==='site') s.site++; else s.admin++; }
+    else if(r.ea){ s[{paid:'aPaid',casual:'aCasual',sick:'aSick'}[r.s]]++; }   // غياب مسائي
+    else s.lp++;                                                                  // إجازة صباحية + حضور مسائي
   }
   s.wk = 0;                                   // جمعة/سبت محتسبة ضمن الغياب المتصل
   for(const d of monthDays(ym)){
     const wd = parse(d).getDay();
     if((wd===5 || wd===6) && weekendCounted(addDays(d, wd===5 ? -1 : -2), empId)) s.wk++;
   }
-  s.absent = s.casual + s.sick + (state.settings.countPaid ? s.paid : 0) + s.wk;
+  s.absent = s.aCasual + s.aSick + (state.settings.countPaid ? s.aPaid : 0) + s.wk;
   s.workDays = state.settings.monthBase - s.absent;
   return s;
 }
@@ -455,6 +472,12 @@ function empCard(e,d){
         ${need?'<span class="hint">أدخل رقم مشروع واحد على الأقل</span>':''}</div>`;
     }
   }
+  if(r && r.s!=='present'){
+    more = `<div class="seg second" role="group" aria-label="الحضور المسائي">
+      <span class="evlbl">الحضور المسائي:</span>
+      <button data-act="eve" data-emp="${e.id}" data-v="present" aria-pressed="${!r.ea}">يحضر مساءً (2 – 5)</button>
+      <button data-act="eve" data-emp="${e.id}" data-v="absent" aria-pressed="${!!r.ea}">غائب مساءً (X)</button></div>`;
+  }
   return `<div class="emp ${cls}" data-card="${e.id}">
     <div class="nm"><b>${esc(e.short||e.name)}</b><small>${esc(e.job||'')}</small></div>
     <div class="ctl">
@@ -466,9 +489,9 @@ function empCard(e,d){
 }
 
 function daySummary(d){
-  let a=0,s=0,l=0,u=0;
-  state.employees.forEach(e=>{ const r = rec(d,e.id); if(!r) u++; else if(r.s==='present'){ r.loc==='site'? s++ : a++; } else l++; });
-  return `<span>حاضر بالإدارة: <b>${a}</b></span><span>في المواقع: <b>${s}</b></span><span>إجازات: <b>${l}</b></span><span>لم يُسجَّل: <b>${u}</b></span>`;
+  let a=0,s=0,lp=0,la=0,u=0;
+  state.employees.forEach(e=>{ const r = rec(d,e.id); if(!r) u++; else if(r.s==='present'){ r.loc==='site'? s++ : a++; } else if(r.ea) la++; else lp++; });
+  return `<span>حاضر بالإدارة: <b>${a}</b></span><span>في المواقع: <b>${s}</b></span><span>إجازة + حضور مسائي: <b>${lp}</b></span><span>غياب مسائي: <b>${la}</b></span><span>لم يُسجَّل: <b>${u}</b></span>`;
 }
 
 function refreshDayBits(){
@@ -485,7 +508,7 @@ function reportView(){
     const s = stats(e.id,ym);
     return `<tr>
       <td class="l"><b>${esc(e.short||e.name)}</b></td>
-      <td>${s.admin}</td><td>${s.site}</td><td>${s.paid}</td><td>${s.casual}</td><td>${s.sick}</td>
+      <td>${s.admin}</td><td>${s.site}</td><td>${s.lp||'—'}</td><td>${s.aPaid}</td><td>${s.aCasual}</td><td>${s.aSick}</td>
       <td>${s.wk||'—'}</td><td>${s.hol||'—'}</td>
       <td>${s.unrec? `<span class="tag w">${s.unrec}</span>` : '<span class="tag ok">0</span>'}</td>
       <td><b>${s.absent}</b></td><td><b>${s.workDays}</b></td>
@@ -505,13 +528,13 @@ function reportView(){
 
   <div class="card">
     <h2>ملخص الشهر</h2>
-    <p class="muted" style="margin:0 0 10px">أيام الدوام = الأحد إلى الخميس بعد استبعاد العطل الرسمية. أيام العمل = ${state.settings.monthBase} − أيام الغياب${state.settings.countPaid?' (الإجازة براتب محسوبة ضمن الغياب)':' (الإجازة براتب غير محسوبة)'}.${state.settings.weekendRule?' إذا غاب الموظف الخميس واستمر غيابه الأحد تُضاف الجمعة والسبت (عمود «جمعة/سبت»).':''}</p>
+    <p class="muted" style="margin:0 0 10px">أيام الدوام = الأحد إلى الخميس بعد استبعاد العطل الرسمية. الغياب = أيام الغياب المسائي فقط (X)؛ أما الإجازة الصباحية مع حضور مسائي فلا تُحتسب غياباً. أيام العمل = ${state.settings.monthBase} − الغياب${state.settings.countPaid?'':' (الغياب المسائي في «إجازة براتب» غير محسوب)'}.${state.settings.weekendRule?' إذا غاب الموظف الخميس واستمر غيابه الأحد تُضاف الجمعة والسبت (عمود «جمعة/سبت»).':''}</p>
     <div class="tablewrap"><table class="data">
-      <thead><tr><th>الموظف</th><th>بالإدارة</th><th>بالموقع</th><th>براتب</th><th>عارضة</th><th>مرضية</th><th>جمعة/سبت</th><th>عطلة</th><th>غير مسجّل</th><th>الغياب</th><th>أيام العمل</th><th></th></tr></thead>
+      <thead><tr><th>الموظف</th><th>بالإدارة</th><th>بالموقع</th><th>إجازة + حضور مسائي</th><th>غياب مسائي براتب</th><th>غياب مسائي عارضة</th><th>غياب مسائي مرضية</th><th>جمعة/سبت</th><th>عطلة</th><th>غير مسجّل</th><th>الغياب</th><th>أيام العمل</th><th></th></tr></thead>
       <tbody>
-        <tr><td class="l" colspan="12" style="background:#f6faf8"><b>قسم المشاريع</b></td></tr>
+        <tr><td class="l" colspan="13" style="background:#f6faf8"><b>قسم المشاريع</b></td></tr>
         ${proj.map(row).join('')}
-        ${re.length? `<tr><td class="l" colspan="12" style="background:#f6faf8"><b>قسم العقارات</b> <span class="muted">(خارج البيان المجمّع)</span></td></tr>${re.map(row).join('')}`:''}
+        ${re.length? `<tr><td class="l" colspan="13" style="background:#f6faf8"><b>قسم العقارات</b> <span class="muted">(خارج البيان المجمّع)</span></td></tr>${re.map(row).join('')}`:''}
       </tbody></table></div>
   </div>
 
@@ -585,7 +608,7 @@ function setupView(){
       ${f('reward','قيمة المكافأة الشهرية (ر.ق)')}${f('startDate','تاريخ بداية العمل الفعلي','date')}${f('total','عدد المكلفين','number')}
       ${f('monthBase','أيام الشهر المعتمدة للحساب','number')}${f('shiftStart','ساعة الحضور (رقم)','number')}${f('shiftEnd','ساعة الانصراف (رقم)','number')}
     </div>
-    <label style="display:flex;gap:8px;align-items:center;margin-top:14px"><input type="checkbox" data-setchk="countPaid" ${s.countPaid?'checked':''}> احتساب «الإجازة براتب» ضمن أيام الغياب</label>
+    <label style="display:flex;gap:8px;align-items:center;margin-top:14px"><input type="checkbox" data-setchk="countPaid" ${s.countPaid?'checked':''}> احتساب الغياب المسائي في «الإجازة براتب» ضمن أيام الغياب</label>
     <label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px"><input type="checkbox" data-setchk="weekendRule" ${s.weekendRule?'checked':''}> <span>احتساب الجمعة والسبت كأيام غياب إذا غاب الموظف يوم الخميس واستمر غيابه يوم الأحد (حتى لو اختلف نوع الإجازة)</span></label>
   </div>
 
@@ -653,7 +676,7 @@ function consolidatedHTML(ym){
     html += `<tr class="wk"><td colspan="2">الأسبوع ${WEEKN[wi]}</td><td>أيام</td>${w.map(d=> d? `<td>${+d.slice(8)}/${+d.slice(5,7)}</td><td>ح</td><td>ن</td>` : '<td></td><td></td><td></td>').join('')}</tr>`;
     emps.forEach((e,ei)=>{
       let cnt = 0;
-      w.forEach(d=>{ if(d && !holidayOn(d)){ const r = rec(d,e.id); if(r && r.s==='present') cnt++; } });
+      w.forEach(d=>{ if(d && !holidayOn(d)){ const r = rec(d,e.id); if(r && (r.s==='present' || !r.ea)) cnt++; } });
       html += `<tr><td>${ei+1}</td><td class="nm">${esc(e.short||e.name)}</td><td>${cnt||''}</td>`;
       w.forEach(d=>{
         if(!d){ if(ei===0) html += `<td class="void" colspan="3" rowspan="${emps.length}"></td>`; return; }
@@ -664,13 +687,14 @@ function consolidatedHTML(ym){
         if(r.s==='present'){
           if(r.loc==='site') html += `<td class="code site">${esc(siteCode(r)||'موقع')}</td><td>${S.shiftStart}</td><td>${S.shiftEnd}</td>`;
           else html += `<td class="code">√</td><td>${S.shiftStart}</td><td>${S.shiftEnd}</td>`;
-        } else html += `<td class="code abs">${ST[r.s].code}</td><td class="x">X</td><td class="x">X</td>`;
+        } else if(r.ea) html += `<td class="code abs">${ST[r.s].code}</td><td class="x">X</td><td class="x">X</td>`;
+        else html += `<td class="code abs">${ST[r.s].code}</td><td>${S.shiftStart}</td><td>${S.shiftEnd}</td>`;
       });
       html += '</tr>';
     });
   });
   html += `</tbody></table>
-    <div class="legendbox"><b>الرموز:</b> √ = حاضر في الإدارة (من ${hh(S.shiftStart)} إلى ${hh(S.shiftEnd)}) &nbsp;|&nbsp; أرقام (مثل 391-70) = حاضر في موقع مشروع الوقف رقم كذا &nbsp;|&nbsp; ج.ر = إجازة براتب &nbsp;|&nbsp; ج.ع = إجازة عارضة &nbsp;|&nbsp; ج.م = إجازة مرضية &nbsp;|&nbsp; X = غياب &nbsp;|&nbsp; ح = حضور، ن = انصراف &nbsp;|&nbsp; الأزرق = عطلة رسمية</div>
+    <div class="legendbox"><b>الرموز:</b> √ = حاضر في الإدارة (من ${hh(S.shiftStart)} إلى ${hh(S.shiftEnd)}) &nbsp;|&nbsp; أرقام (مثل 391-70) = حاضر في موقع مشروع الوقف رقم كذا &nbsp;|&nbsp; ج.ر = إجازة براتب &nbsp;|&nbsp; ج.ع = إجازة عارضة &nbsp;|&nbsp; ج.م = إجازة مرضية (ومعها 2 و5 = حضر مساءً، ومعها X = غاب مساءً) &nbsp;|&nbsp; X = غياب مسائي &nbsp;|&nbsp; ح = حضور، ن = انصراف &nbsp;|&nbsp; الأزرق = عطلة رسمية</div>
     <div class="sigrow"><span>اعتماد: ........................................</span><span>اعتماد: ........................................</span></div>
   </section>`;
   return html;
@@ -705,8 +729,8 @@ function sheetHTML(e, ym){
         return;
       }
       const r = rec(d,e.id);
-      if(r && r.s==='present'){
-        body += `<tr class="${cls0}"><td>${WD[i]}</td><td>${fmtShort(d)}</td><td></td><td>${hh(S.shiftStart)}</td><td></td><td></td><td>${hh(S.shiftEnd)}</td><td></td><td></td></tr>`;
+      if(r && (r.s==='present' || !r.ea)){
+        body += `<tr class="${cls0}"><td>${WD[i]}</td><td>${fmtShort(d)}</td><td></td><td>${hh(S.shiftStart)}</td><td></td><td></td><td>${hh(S.shiftEnd)}</td><td></td><td>${r.s==='present' ? '' : ST[r.s].label+' (حضور مسائي)'}</td></tr>`;
       } else if(r){
         body += `<tr class="abs ${cls0}"><td>${WD[i]}</td><td>${fmtShort(d)}</td><td></td><td></td><td></td><td></td><td></td><td></td><td>${ST[r.s].label}${(i===0 && weekendCounted(addDays(d,-3), e.id)) ? ' (+ الجمعة والسبت)' : ''}</td></tr>`;
       } else {
@@ -766,7 +790,7 @@ document.addEventListener('click', ev=>{
       const cur = rec(d,emp);
       if(cur && cur.s===t.dataset.v) setRec(d,emp,null);               // ضغطة ثانية = إلغاء التسجيل
       else if(t.dataset.v==='present') setRec(d,emp,{s:'present',loc:'admin',p1:'',p2:''});
-      else setRec(d,emp,{s:t.dataset.v});
+      else setRec(d,emp,{s:t.dataset.v, ea: !!(cur && cur.s!=='present' && cur.ea)});
       save(); render(); break; }
     case 'loc': {
       const cur = rec(d,emp) || {s:'present'};
@@ -774,6 +798,7 @@ document.addEventListener('click', ev=>{
       save(); render();
       if(t.dataset.v==='site'){ const i = $(`input[data-f="p1"][data-emp="${emp}"]`); if(i) i.focus(); }
       break; }
+    case 'eve': { const cur = rec(d,emp); if(cur && cur.s!=='present'){ cur.ea = (t.dataset.v==='absent'); setRec(d,emp,cur); save(); render(); } break; }
     case 'allAdmin':
       state.employees.forEach(e=>{ if(!rec(d,e.id)) setRec(d,e.id,{s:'present',loc:'admin',p1:'',p2:''}); });
       save(); render(); toast('تم تعيين الباقي: حاضر بالإدارة'); break;
@@ -826,13 +851,13 @@ document.addEventListener('change', ev=>{
         const obj = JSON.parse(fr.result);
         if(!obj || !Array.isArray(obj.employees) || typeof obj.records!=='object') throw new Error('bad');
         if(!confirm('سيتم استبدال البيانات الحالية بالنسخة الاحتياطية. متابعة؟')) return;
-        state = obj; initStateFix(); save(); render(); toast('تم الاسترجاع');
+        state = obj; migrate(state,null); initStateFix(); save(); render(); toast('تم الاسترجاع');
       }catch(e){ alert('الملف غير صالح كنسخة احتياطية.'); }
     };
     fr.readAsText(t.files[0]);
   }
 });
-function initStateFix(){ state.settings = Object.assign(defaultSettings(), state.settings||{}); state.holidays = state.holidays||[]; }
+function initStateFix(){ state.settings = Object.assign(defaultSettings(), state.settings||{}); state.holidays = state.holidays||[]; state.records = state.records||{}; }
 
 function updateHolCount(){
   const a = $('#hStart'), b = $('#hEnd'), el = $('#hCount'); if(!a||!b||!el) return;
