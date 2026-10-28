@@ -1,0 +1,9 @@
+[
+  { "username": "admin", "name": "مدير النظام (اختبار)", "role": "admin", "password": "temp-admin1" },
+  { "username": "head", "name": "رئيس القسم (اختبار)", "role": "section_head", "password": "temp-head1" },
+  { "username": "director", "name": "مدير الإدارة (اختبار)", "role": "director", "password": "temp-dir1" },
+  { "username": "eng1", "name": "مهندس أول", "role": "engineer", "password": "temp-eng1" },
+  { "username": "eng2", "name": "مهندس ثانٍ", "role": "engineer", "password": "temp-eng2" },
+  { "username": "waqf", "name": "رئيس قسم تنمية الوقف (اختبار)", "role": "waqf_dev_head", "password": "temp-waqf1" },
+  { "username": "sec", "name": "سكرتير المدير (اختبار)", "role": "secretary", "password": "temp-sec1" }
+]

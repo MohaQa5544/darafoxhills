@@ -1,0 +1,10 @@
+{
+  "name": "sijil-alada",
+  "private": true,
+  "description": "سجل الأداء — نظام تقييم أداء المقاولين والاستشاريين (الإدارة العامة للأوقاف)",
+  "type": "module",
+  "engines": { "node": "22.x" },
+  "dependencies": {
+    "@vercel/blob": "2.8.1"
+  }
+}

@@ -4,3 +4,5 @@ dist/
 .env
 app/dist/
 test/shots/
+node_modules/
+dev/.data/

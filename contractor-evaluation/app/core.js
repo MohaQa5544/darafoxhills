@@ -49,8 +49,18 @@ window.EV = (function () {
   const byId = (coll, id) => (state.data && state.data[coll] || []).find(r => r.id === id);
   const list = (coll, f) => (state.data && state.data[coll] || []).filter(f || (() => true));
   async function audit(action, entity, entityId, detail) { try { await state.store.appendAudit({ id: uid(), at: nowISO(), actor: state.user ? state.user.id : null, actorName: state.user ? state.user.username : 'system', action, entity, entityId: entityId || null, detail: detail || null }); } catch (e) { console.warn('audit', e); } }
-  async function save(coll, rec, action) { rec.updatedAt = nowISO(); if (!rec.createdAt) rec.createdAt = rec.updatedAt; if (!rec.createdBy && state.user) rec.createdBy = state.user.id; await state.store.put(coll, rec); if (action !== null) await audit(action || 'save', coll, rec.id, { name: rec.name || rec.name_ar || rec.username || rec.label || rec.type || '' }); return rec; }
-  async function remove(coll, id) { const r = byId(coll, id); await state.store.remove(coll, id); await audit('delete', coll, id, { name: r && (r.name || r.name_ar || r.username || r.label) || '' }); }
+  const recName = r => r ? (r.name || r.name_ar || r.username || r.label || r.type || '') : '';
+  async function save(coll, rec, action) {
+    const prev = [rec.updatedAt, rec.createdAt, rec.createdBy];
+    rec.updatedAt = nowISO(); if (!rec.createdAt) rec.createdAt = rec.updatedAt; if (!rec.createdBy && state.user) rec.createdBy = state.user.id;
+    if (state.store.putRecord) {
+      try { await state.store.putRecord(coll, rec, { base: prev[0] || null, audit: action === null ? null : { action: action || 'save', detail: { name: recName(rec) } } }); }
+      catch (e) { ['updatedAt', 'createdAt', 'createdBy'].forEach((k, i) => { if (prev[i] === undefined) delete rec[k]; else rec[k] = prev[i]; }); throw e; }
+      return rec;
+    }
+    await state.store.put(coll, rec); if (action !== null) await audit(action || 'save', coll, rec.id, { name: recName(rec) }); return rec;
+  }
+  async function remove(coll, id) { const r = byId(coll, id); if (state.store.mode === 'cloud') { await state.store.remove(coll, id, { audit: { action: 'delete', detail: { name: recName(r) } } }); return; } await state.store.remove(coll, id); await audit('delete', coll, id, { name: recName(r) }); }
   const userName = id => { const u = byId('users', id); return u ? u.name : '—'; };
   const companyName = id => { const c = byId('companies', id); return c ? c.name_ar : '—'; };
   const projectName = id => { const p = byId('projects', id); return p ? p.name : '—'; };
@@ -67,15 +77,18 @@ window.EV = (function () {
   }
 
   /* ---------- الدخول ---------- */
+  const isCloud = () => !!(state.store && state.store.mode === 'cloud');
+  function applyData(d) { state.data = d; state.settings = Object.assign(clone(B.defaultSettings), d.settings); }
   async function login(username, password) {
+    if (isCloud()) { const r = await state.store.login(String(username || '').trim(), password); applyData(state.store.data); state.user = byId('users', r.me); if (!state.user) throw new Error('تعذر تحميل بيانات الحساب'); return; }
     const u = list('users').find(x => x.username.toLowerCase() === String(username || '').trim().toLowerCase());
     if (!u) throw new Error('اسم المستخدم غير موجود');
     if (!u.active) throw new Error('هذا الحساب معطَّل. راجع مدير النظام');
     if ((await hashPassword(password, u.salt)) !== u.hash) throw new Error('كلمة المرور غير صحيحة');
     state.user = u; sessionStorage.setItem('ev_user', u.id); u.lastLoginAt = nowISO(); await save('users', u, null); await audit('login', 'users', u.id);
   }
-  function logout() { audit('logout', 'users', state.user && state.user.id); state.user = null; sessionStorage.removeItem('ev_user'); navigate('#/login'); }
-  async function setPassword(user, pw) { user.salt = uid(); user.hash = await hashPassword(pw, user.salt); user.mustChange = false; await save('users', user, 'password_change'); }
+  function logout() { if (isCloud()) { state.store.logout(); applyData(state.store.data); } else audit('logout', 'users', state.user && state.user.id); state.user = null; sessionStorage.removeItem('ev_user'); navigate('#/login'); }
+  async function setPassword(user, pw, current) { if (isCloud()) { await state.store.changePassword(pw, current); user.mustChange = false; return; } user.salt = uid(); user.hash = await hashPassword(pw, user.salt); user.mustChange = false; await save('users', user, 'password_change'); }
 
   /* ---------- النماذج والاحتساب ---------- */
   const activeTemplate = role => list('templates', t => t.role === role && t.status === 'active').sort((a, b) => b.version - a.version)[0];
@@ -129,9 +142,11 @@ window.EV = (function () {
   function toast(msg, type) { const t = $('#toast'); const el = document.createElement('div'); el.className = 'toast ' + (type || 'info'); el.textContent = msg; t.appendChild(el); setTimeout(() => el.classList.add('show'), 10); setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 3600); }
   function modal(opts) {
     return new Promise(resolve => {
-      const m = $('#modal'); m.hidden = false; m.innerHTML = `<div class="modal-box ${opts.wide ? 'wide' : ''}" role="dialog" aria-modal="true"><div class="modal-head"><h3>${esc(opts.title || '')}</h3><button class="icon-btn" data-m="cancel" aria-label="إغلاق">✕</button></div><div class="modal-body">${opts.body || ''}</div><div class="modal-foot">${opts.hideOk ? '' : `<button class="btn primary" data-m="ok">${esc(opts.okText || 'موافق')}</button>`}<button class="btn" data-m="cancel">${esc(opts.cancelText || 'إلغاء')}</button></div></div>`;
+      const m = $('#modal'); m.hidden = false; m.innerHTML = `<div class="modal-box ${opts.wide ? 'wide' : ''}" role="dialog" aria-modal="true"><div class="modal-head"><h3>${esc(opts.title || '')}</h3><button class="icon-btn" data-m="cancel" aria-label="إغلاق">✕</button></div><div class="modal-body">${opts.body || ''}</div><div class="modal-foot">${opts.hideOk ? '' : `<button class="btn primary" data-m="ok">${esc(opts.okText || 'موافق')}</button>`}${opts.hideCancel ? '' : `<button class="btn" data-m="cancel">${esc(opts.cancelText || 'إلغاء')}</button>`}</div></div>`;
       const done = v => { m.hidden = true; m.innerHTML = ''; resolve(v); };
-      m.onclick = async e => { const b = e.target.closest('[data-m]'); if (!b) { if (e.target === m) done(false); return; } if (b.dataset.m === 'ok') { if (opts.onOk) { const r = await opts.onOk(m); if (r === false) return; done(r === undefined ? true : r); } else done(true); } else done(false); };
+      let busy = false;
+      m.onclick = async e => { const b = e.target.closest('[data-m]'); if (!b) { if (e.target === m && !busy) done(false); return; } if (busy) return;
+        if (b.dataset.m === 'ok') { if (opts.onOk) { busy = true; b.disabled = true; let r; try { r = await opts.onOk(m); } catch (err) { console.error(err); busy = false; b.disabled = false; toast('خطأ: ' + err.message, 'bad'); if (err.status === 409 || err.status === 403) { done(false); resync(err); } return; } busy = false; b.disabled = false; if (r === false) return; done(r === undefined ? true : r); } else done(true); } else done(false); };
       if (opts.onOpen) opts.onOpen(m); const f = m.querySelector('input,select,textarea'); if (f) f.focus();
     });
   }
@@ -148,8 +163,8 @@ window.EV = (function () {
     const u = state.user; const nav = [['#/home', 'الرئيسية'], ['#/companies', 'الشركات'], ['#/projects', 'المشاريع والعقود'], ['#/register', 'السجل والقوائم'], ['#/settings', 'الإعدادات']];
     const cur = location.hash.split('/')[1] || 'home';
     $('#app').innerHTML = `<header class="top"><div class="brand"><img src="${window.LOGO_MOE || ''}" alt="وزارة الأوقاف والشؤون الإسلامية" class="logo-moe"><div class="app-title"><h1>${esc(state.settings.appName)}</h1><p>نظام تقييم أداء المقاولين والاستشاريين — ${esc(state.settings.orgName)}</p></div><img src="${window.LOGO_AWQAF || ''}" alt="أوقاف" class="logo-awqaf"></div>
-      <div class="userbar"><span class="who"><b>${esc(u.name)}</b> · ${esc(L.userRole[u.role])}</span><button class="btn small" data-act="reload" title="إعادة تحميل البيانات من المجلد">⟳ تحديث</button><a class="btn small" href="#/password">كلمة المرور</a><button class="btn small" data-act="logout">خروج</button></div></header>
-      <nav class="tabs">${nav.map(([h, t]) => `<a href="${h}" ${('#/' + cur) === h ? 'aria-current="page"' : ''}>${t}</a>`).join('')}<span class="grow"></span><span class="store-info" title="${esc(state.store.describe())}">${state.store.mode === 'folder' ? '📁 مجلد مشترك' : '💾 هذا الجهاز'}</span></nav>
+      <div class="userbar"><span class="who"><b>${esc(u.name)}</b> · ${esc(L.userRole[u.role])}</span><button class="btn small${state.store.remoteChanged ? ' has-updates' : ''}" data-act="reload" title="${state.store.remoteChanged ? 'أضاف الزملاء تعديلات جديدة — اضغط لتحميلها' : 'إعادة تحميل أحدث البيانات'}">⟳ تحديث</button><a class="btn small" href="#/password">كلمة المرور</a><button class="btn small" data-act="logout">خروج</button></div></header>
+      <nav class="tabs">${nav.map(([h, t]) => `<a href="${h}" ${('#/' + cur) === h ? 'aria-current="page"' : ''}>${t}</a>`).join('')}<span class="grow"></span><span class="store-info" title="${esc(state.store.describe())}">${state.store.mode === 'folder' ? '📁 مجلد مشترك' : state.store.mode === 'cloud' ? '☁️ سحابي' : '💾 هذا الجهاز'}</span></nav>
       <main id="main" class="${o.wide ? 'wide' : ''}">${html}</main>
       <footer class="foot"><span>${esc(state.settings.orgName)} · ${esc(state.settings.ministryName)}</span><span>سجل الأداء · الإصدار 1.0</span></footer>`;
     window.scrollTo(0, 0);
@@ -184,7 +199,15 @@ window.EV = (function () {
   async function useFolder(h) { state.store = await new S.FolderStore(h).init(); state.data = await state.store.load(); localStorage.setItem('ev_mode', 'folder'); await afterStore(); }
   async function useLocal() { state.store = await new S.LocalStore().init(); state.data = await state.store.load(); localStorage.setItem('ev_mode', 'local'); await afterStore(); }
   async function afterStore() { await seedIfEmpty(); state.settings = Object.assign(clone(B.defaultSettings), state.data.settings); const id = sessionStorage.getItem('ev_user'); if (id) { const u = byId('users', id); if (u && u.active) state.user = u; } if (state.store.conflicts) toast(`تنبيه: ${state.store.conflicts} ملف متعارض في مجلد البيانات تم تجاهله`, 'warn'); render(); }
-  async function reload() { if (!state.store) return; state.data = await state.store.load(); state.settings = Object.assign(clone(B.defaultSettings), state.data.settings); if (state.user) state.user = byId('users', state.user.id) || state.user; render(); toast('تم تحديث البيانات'); }
+  async function useCloud(info) {
+    state.store = await new S.CloudStore().init(); applyData(state.store.data);
+    state.store.onUnauthorized = () => { if (!state.user) return; state.user = null; applyData(S.empty()); state.store.data = state.data; render(); };
+    state.store.onRemoteChange = () => { const b = $('[data-act="reload"]'); if (b) { b.classList.add('has-updates'); b.title = 'أضاف الزملاء تعديلات جديدة — اضغط لتحميلها'; } };
+    if (info && info.configured === false) { $('#app').innerHTML = `<div class="setup"><div class="setup-card"><h1>سجل الأداء</h1><div class="note bad">الخادم السحابي غير مهيأ بعد (مفتاح الجلسات أو التخزين). راجع مدير النظام.</div></div></div>`; return; }
+    if (state.store.token) { try { await state.store.load(); applyData(state.store.data); state.user = byId('users', state.store.me) || null; } catch (e) { if (e.status !== 401) toast(e.message, 'bad'); } }
+    render();
+  }
+  async function reload() { if (!state.store) return; if (isCloud()) { await state.store.load(); applyData(state.store.data); if (state.user) { const u = byId('users', state.user.id); if (!u || !u.active) return logout(); state.user = u; } render(); toast('تم تحديث البيانات'); return; } state.data = await state.store.load(); state.settings = Object.assign(clone(B.defaultSettings), state.data.settings); if (state.user) state.user = byId('users', state.user.id) || state.user; render(); toast('تم تحديث البيانات'); }
 
   actions.pickFolder = async () => { try { const h = await S.pickFolder(); await useFolder(h); } catch (e) { if (e.name !== 'AbortError') toast('تعذر فتح المجلد: ' + e.message, 'bad'); } };
   actions.resumeFolder = async () => { const h = state.pendingHandle; if (!h) return; if (await S.ensurePermission(h, true)) await useFolder(h); else toast('لم يُمنح الإذن', 'warn'); };
@@ -195,20 +218,32 @@ window.EV = (function () {
   actions.print = () => window.print();
   actions.nav = el => navigate(el.dataset.to);
 
+  /* بعد رفض الخادم لتعديل (تعارض أو صلاحية) تُعاد البيانات من الخادم حتى لا تبقى الشاشة على حالة لم تُحفظ */
+  function resync(err) { if (isCloud() && state.user && err && (err.status === 409 || err.status === 403)) setTimeout(() => reload().catch(() => { }), 600); }
   function bind() {
-    document.addEventListener('click', e => { const el = e.target.closest('[data-act]'); if (!el || el.disabled) return; const fn = actions[el.dataset.act]; if (fn) { e.preventDefault(); Promise.resolve(fn(el, e)).catch(err => { console.error(err); toast('خطأ: ' + err.message, 'bad'); }); } });
-    document.addEventListener('submit', e => { const f = e.target.closest('form[data-form]'); if (!f) return; e.preventDefault(); const fn = forms[f.dataset.form]; if (fn) Promise.resolve(fn(f, formData(f))).catch(err => { console.error(err); toast('خطأ: ' + err.message, 'bad'); }); });
-    document.addEventListener('change', e => { const el = e.target.closest('[data-change]'); if (!el) return; if (el.dataset.change === 'orientation') { setOrientation(el.value); return; } const fn = actions['change:' + el.dataset.change]; if (fn) Promise.resolve(fn(el, e)).catch(err => toast('خطأ: ' + err.message, 'bad')); });
+    document.addEventListener('click', e => { const el = e.target.closest('[data-act]'); if (!el || el.disabled) return; const fn = actions[el.dataset.act]; if (fn) { e.preventDefault(); Promise.resolve(fn(el, e)).catch(err => { console.error(err); toast('خطأ: ' + err.message, 'bad'); resync(err); }); } });
+    document.addEventListener('submit', e => { const f = e.target.closest('form[data-form]'); if (!f) return; e.preventDefault(); const fn = forms[f.dataset.form]; if (fn) Promise.resolve(fn(f, formData(f))).catch(err => { console.error(err); toast('خطأ: ' + err.message, 'bad'); resync(err); }); });
+    document.addEventListener('change', e => { const el = e.target.closest('[data-change]'); if (!el) return; if (el.dataset.change === 'orientation') { setOrientation(el.value); return; } const fn = actions['change:' + el.dataset.change]; if (fn) Promise.resolve(fn(el, e)).catch(err => { toast('خطأ: ' + err.message, 'bad'); resync(err); }); });
     document.addEventListener('input', e => { const el = e.target.closest('[data-input]'); if (!el) return; const fn = actions['input:' + el.dataset.input]; if (fn) fn(el, e); });
     window.addEventListener('hashchange', render);
+    document.addEventListener('error', e => { const t = e.target; if (t && t.tagName === 'IMG' && t.hasAttribute('data-bg-fallback')) { const bg = t.closest('.bg'); if (bg) bg.classList.add('nobg'); } }, true);
   }
   async function boot() {
     bind(); state.settings = clone(B.defaultSettings);
+    const cloud = await S.detectCloud(); if (cloud) { await useCloud(cloud); return; }
     const mode = localStorage.getItem('ev_mode');
     if (S.supportsFolder() && mode !== 'local') { const h = await S.savedFolder(); if (h) { if (await S.ensurePermission(h, false)) { try { await useFolder(h); return; } catch (e) { console.warn(e); } } state.pendingHandle = h; } }
     if (mode === 'local') { await useLocal(); return; }
     render();
   }
 
-  return { state, routes, actions, forms, route, navigate, render, page, printPage, setOrientation, boot, reload, useLocal, $, esc, uid, clone, nowISO, today, fmtDate, fmtDateTime, fmtNum, fmtMoney, addDays, sha256, hashPassword, can, isManager, isApprover, isAdmin, canEvaluate, canViewAll, byId, list, save, remove, audit, userName, companyName, projectName, login, logout, setPassword, activeTemplate, templateFor, weightsFor, ratingFor, compute, consolidate, companyScores, suggestedConsequence, isSmallContract, toast, modal, confirm, badge, ratingBadge, field, opts, formData, L, B, screens: {} };
+  /* فتح المرفق: الصور وPDF والنص تُعرض، وما عداها يُنزَّل فقط حتى لا يُنفَّذ محتوى نشط داخل البرنامج */
+  async function openStoredFile(path, name) {
+    const blob = await state.store.fileBlob(path); if (!blob) throw new Error('تعذر فتح الملف');
+    const safe = /^(image\/(png|jpe?g|gif|webp|bmp)|application\/pdf|text\/plain)$/i.test(blob.type);
+    const obj = URL.createObjectURL(new Blob([blob], { type: safe ? blob.type : 'application/octet-stream' }));
+    if (safe) window.open(obj, '_blank', 'noopener'); else { const a = document.createElement('a'); a.href = obj; a.download = name || path.split('/').pop().replace(/^([0-9a-f]{8}|notice)__/, ''); document.body.appendChild(a); a.click(); a.remove(); }
+    setTimeout(() => URL.revokeObjectURL(obj), 120000);
+  }
+  return { state, routes, actions, forms, route, navigate, render, page, printPage, setOrientation, boot, reload, useLocal, $, esc, uid, clone, nowISO, today, fmtDate, fmtDateTime, fmtNum, fmtMoney, addDays, sha256, hashPassword, can, isManager, isApprover, isAdmin, canEvaluate, canViewAll, byId, list, save, remove, audit, userName, companyName, projectName, login, logout, setPassword, isCloud, openStoredFile, activeTemplate, templateFor, weightsFor, ratingFor, compute, consolidate, companyScores, suggestedConsequence, isSmallContract, toast, modal, confirm, badge, ratingBadge, field, opts, formData, L, B, screens: {} };
 })();

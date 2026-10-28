@@ -10,7 +10,7 @@
 
   /* ---------- الترويسة: خلفية الوورد (طولي) والصورة العرضية؛ تتكرران في كل صفحة مطبوعة، مع ترويسة SVG احتياطية إن غابت الصور ---------- */
   const lhFallback = () => `<div class="lh-css"><div class="lh-top"><svg class="lh-svg" viewBox="0 0 210 12" preserveAspectRatio="none" aria-hidden="true"><rect x="0" y="0" width="210" height="9" fill="#005a40"/><polygon points="0,0 62,0 54,9 0,9" fill="#343434"/><polygon points="148,0 210,0 210,9 156,9" fill="#343434"/><rect x="0" y="9" width="210" height="1.4" fill="#bcbdc1"/></svg><img src="${window.LOGO_AWQAF || ''}" alt="" class="lh-logo-l"><img src="${window.LOGO_MOE || ''}" alt="" class="lh-logo-r"></div><div class="lh-bottom"><svg viewBox="0 0 210 9" preserveAspectRatio="none" aria-hidden="true"><rect width="210" height="9" fill="#343434"/></svg><span>instagram.com/waqfqa · x.com/waqfqa · youtube.com/@WaqfQA · facebook.com/WaqfQA</span><span>P.O. Box 28222 Doha Qatar · +974 4470 3528 · www.awqaf.gov.qa</span></div></div>`;
-  const bgImg = (cls, src) => `<img class="bg-img ${cls}" src="${src}" alt="" onerror="this.closest('.bg').classList.add('nobg')">`;
+  const bgImg = (cls, src) => `<img class="bg-img ${cls}" src="${src}" alt="" data-bg-fallback>`;
   const bgLayer = (o, src) => `<div class="bg only-${o}">${bgImg('bg-full', src)}<div class="bg-head">${bgImg('', src)}</div><div class="bg-foot">${bgImg('', src)}</div>${lhFallback()}</div>`;
   function sheet(inner, cls) {
     const pages = Array.isArray(inner) ? inner : [inner];

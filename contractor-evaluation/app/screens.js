@@ -19,17 +19,17 @@
     document.body.classList.remove('print-mode'); document.title = st.settings.appName;
     EV.$('#app').innerHTML = `<div class="setup"><div class="setup-card login"><div class="logos"><img src="${window.LOGO_MOE || ''}" alt="الوزارة"><img src="${window.LOGO_AWQAF || ''}" alt="أوقاف"></div><h1>${esc(st.settings.appName)}</h1><p class="muted">نظام تقييم أداء المقاولين والاستشاريين</p>
       <form data-form="login" class="stack">${field('اسم المستخدم', '<input name="username" id="login-user" required autocomplete="username" dir="ltr" placeholder="مثال: fhussni">')}${field('كلمة المرور', '<input type="password" name="password" id="login-pass" required autocomplete="current-password" dir="ltr">')}<div id="login-err" class="err" hidden></div><button class="btn primary big" type="submit">دخول</button></form>
-      <p class="hint">اسم المستخدم هو ما قبل @ في بريدك الرسمي. كلمة المرور الأولية 123456 ويُطلب تغييرها عند أول دخول.</p>
-      <p class="hint"><span class="store-info">${esc(st.store.describe())}</span> · <button class="linkbtn" data-act="changeStore">تغيير مكان البيانات</button></p></div></div>`;
+      <p class="hint">${EV.isCloud() ? 'اسم المستخدم هو ما قبل @ في بريدك الرسمي. كلمة المرور المؤقتة يرسلها لك مدير النظام، ويُطلب تغييرها عند أول دخول.' : 'اسم المستخدم هو ما قبل @ في بريدك الرسمي. كلمة المرور الأولية 123456 ويُطلب تغييرها عند أول دخول.'}</p>
+      <p class="hint"><span class="store-info">${esc(st.store.describe())}</span>${EV.isCloud() ? '' : ' · <button class="linkbtn" data-act="changeStore">تغيير مكان البيانات</button>'}</p></div></div>`;
   };
   F.login = async (f, d) => { const err = f.querySelector('#login-err'); try { await EV.login(d.username, d.password); EV.navigate(st.user.mustChange ? '#/password' : '#/home'); } catch (e) { err.hidden = false; err.textContent = e.message; } };
   A.changeStore = async () => { if (await EV.confirm('سيتم إغلاق مكان البيانات الحالي وإعادة تشغيل البرنامج لاختيار مكان آخر. البيانات لا تُحذف.')) { localStorage.removeItem('ev_mode'); await EV.B && window.EV_STORE.forgetFolder(); location.reload(); } };
 
   R(/^#\/password$/, () => {
     EV.page(`<div class="narrow"><h2>${st.user.mustChange ? 'تغيير كلمة المرور الأولية' : 'تغيير كلمة المرور'}</h2>${st.user.mustChange ? '<div class="note">لأمان الحساب، يجب تغيير كلمة المرور الأولية قبل المتابعة.</div>' : ''}
-      <form data-form="password" class="card stack">${field('كلمة المرور الجديدة', '<input type="password" name="p1" required minlength="6" dir="ltr" autocomplete="new-password">', '6 أحرف على الأقل')}${field('تأكيد كلمة المرور', '<input type="password" name="p2" required minlength="6" dir="ltr" autocomplete="new-password">')}<button class="btn primary" type="submit">حفظ</button></form></div>`, { title: 'كلمة المرور' });
+      <form data-form="password" class="card stack">${EV.isCloud() && !st.user.mustChange ? field('كلمة المرور الحالية', '<input type="password" name="p0" required dir="ltr" autocomplete="current-password">') : ''}${field('كلمة المرور الجديدة', `<input type="password" name="p1" required minlength="${EV.isCloud() ? 8 : 6}" dir="ltr" autocomplete="new-password">`, EV.isCloud() ? '8 أحرف على الأقل تجمع حروفاً وأرقاماً' : '6 أحرف على الأقل')}${field('تأكيد كلمة المرور', `<input type="password" name="p2" required minlength="${EV.isCloud() ? 8 : 6}" dir="ltr" autocomplete="new-password">`)}<button class="btn primary" type="submit">حفظ</button></form></div>`, { title: 'كلمة المرور' });
   });
-  F.password = async (f, d) => { if (d.p1 !== d.p2) return EV.toast('كلمتا المرور غير متطابقتين', 'bad'); if (d.p1 === '123456') return EV.toast('اختر كلمة مرور مختلفة عن الأولية', 'bad'); await EV.setPassword(st.user, d.p1); EV.toast('تم تغيير كلمة المرور', 'ok'); EV.navigate('#/home'); };
+  F.password = async (f, d) => { if (d.p1 !== d.p2) return EV.toast('كلمتا المرور غير متطابقتين', 'bad'); if (d.p1 === '123456') return EV.toast('اختر كلمة مرور مختلفة عن الأولية', 'bad'); await EV.setPassword(st.user, d.p1, d.p0); EV.toast('تم تغيير كلمة المرور', 'ok'); EV.navigate('#/home'); };
 
   /* ---------- الرئيسية ---------- */
   R(/^#\/home$/, () => {
@@ -133,5 +133,5 @@
     const ok = await EV.modal({ title: 'فتح دورة تقييم', okText: 'فتح الدورة', body: `<form id="mf" class="stack">${field('نوع الدورة', `<select name="type" data-change="cycleType">${opts(L.cycleType, 'interim')}</select>`, k.role === 'designer' ? 'للمصمم: مرحلي عند نهاية كل مرحلة تصميم، نهائي عند اعتماد وثائق الطرح' : 'مرحلي كل 6 أشهر، نهائي عند الاستلام الابتدائي، ثم ما بعد العقد')}${field('تسمية الدورة', `<input name="label" value="الدورة ${n}" required>`)}${field('تاريخ الاستحقاق', `<input type="date" name="dueDate" value="${EV.addDays(today(), 14)}">`)}</form>`, onOk: async m => { const d = EV.formData(m.querySelector('#mf')); const cy = { id: uid(), contractId: k.id, type: d.type, label: d.label, dueDate: d.dueDate, status: 'open', method: 'mean', excluded: [], evalWeights: {} }; await EV.save('cycles', cy, 'cycle_open'); return cy.id; } });
     if (ok) EV.render();
   };
-  A.openFile = async el => { const url = await st.store.fileURL(el.dataset.path); if (!url) return EV.toast('تعذر فتح الملف', 'bad'); window.open(url, '_blank'); };
+  A.openFile = async el => { try { await EV.openStoredFile(el.dataset.path, el.dataset.name || el.textContent.trim()); } catch (e) { EV.toast(e.message || 'تعذر فتح الملف', 'bad'); } };
 })(window.EV);

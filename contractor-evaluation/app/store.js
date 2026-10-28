@@ -24,6 +24,7 @@ window.EV_STORE = (function () {
     async appendAudit(rec) { this.data.audit.push(rec); if (this.data.audit.length > 5000) this.data.audit.splice(0, this.data.audit.length - 5000); this.persist(); }
     async saveFile(path, file) { if (file.size > 2 * 1024 * 1024) throw new Error('في وضع المتصفح يُسمح بملفات حتى 2 ميجابايت فقط. استخدم مجلد البيانات المشترك للملفات الأكبر.'); this.files[path] = { data: await toDataURL(file), name: file.name, type: file.type }; this.persist(); }
     async fileURL(path) { const f = this.files[path]; return f ? f.data : null; }
+    async fileBlob(path) { const f = this.files[path]; if (!f) return null; const m = /^data:([^;,]*)(;base64)?,(.*)$/.exec(f.data || ''); if (!m) return null; const raw = m[2] ? atob(m[3]) : decodeURIComponent(m[3]); const u = new Uint8Array(raw.length); for (let i = 0; i < raw.length; i++) u[i] = raw.charCodeAt(i); return new Blob([u], { type: f.type || m[1] || 'application/octet-stream' }); }
     async deleteFile(path) { delete this.files[path]; this.persist(); }
     async exportAll() { return JSON.stringify(Object.assign({}, this.data, { files: this.files, exportedAt: new Date().toISOString() })); }
     async importAll(json) { const d = JSON.parse(json); this.files = d.files || {}; delete d.files; delete d.exportedAt; this.data = Object.assign(empty(), d); this.persist(); }
@@ -58,16 +59,61 @@ window.EV_STORE = (function () {
     async appendAudit(rec) { const name = `${rec.at.slice(0, 7)}__${rec.actorName || 'system'}.json`.replace(/[\\/:*?"<>|]/g, '_'); const ad = await this.dir('audit'); let arr = []; try { arr = (await this.readJSON(ad, name)) || []; } catch (e) { } arr.push(rec); await this.writeJSON(ad, name, arr); this.data.audit.push(rec); }
     async walk(path, create) { const parts = path.split('/').filter(Boolean); let d = await this.dir(parts[0], create); for (let i = 1; i < parts.length - 1; i++) d = await d.getDirectoryHandle(parts[i], { create }); return { dir: d, name: parts[parts.length - 1] }; }
     async saveFile(path, file) { const { dir, name } = await this.walk(path, true); const fh = await dir.getFileHandle(name, { create: true }); const w = await fh.createWritable(); await w.write(file); await w.close(); }
-    async fileURL(path) { try { const { dir, name } = await this.walk(path, false); const fh = await dir.getFileHandle(name); return URL.createObjectURL(await fh.getFile()); } catch (e) { return null; } }
+    async fileURL(path) { const b = await this.fileBlob(path); return b ? URL.createObjectURL(b) : null; }
+    async fileBlob(path) { try { const { dir, name } = await this.walk(path, false); const fh = await dir.getFileHandle(name); return await fh.getFile(); } catch (e) { return null; } }
     async deleteFile(path) { try { const { dir, name } = await this.walk(path, false); await dir.removeEntry(name); } catch (e) { } }
     async exportAll() { return JSON.stringify(Object.assign({}, this.data, { exportedAt: new Date().toISOString() })); }
     async importAll(json) { const d = JSON.parse(json); for (const c of COLLS) for (const r of (d[c] || [])) await this.put(c, r); if (d.settings) await this.putSettings(d.settings); }
     describe() { return 'مجلد البيانات المشترك: ' + this.root.name + '\\data'; }
   }
 
+
+  /* CloudStore: الخادم السحابي — بيانات مشتركة لكل الفريق، والدخول والصلاحيات على الخادم */
+  class CloudStore {
+    constructor(base) { this.mode = 'cloud'; this.base = base || 'api/'; this.data = empty(); this.token = null; try { this.token = sessionStorage.getItem('ev_token'); } catch (e) { } this.rev = 0; this.remoteChanged = false; this.q = Promise.resolve(); this.onUnauthorized = null; this.onRemoteChange = null; this.me = null; }
+    async init() { return this; }
+    setToken(t) { this.token = t || null; try { if (t) sessionStorage.setItem('ev_token', t); else sessionStorage.removeItem('ev_token'); } catch (e) { } }
+    async req(path, init) { try { return await fetch(this.base + path, Object.assign({ cache: 'no-store', credentials: 'same-origin' }, init)); } catch (e) { const err = new Error('تعذر الاتصال بالخادم. تحقق من اتصال الإنترنت ثم أعد المحاولة.'); err.network = true; throw err; } }
+    async fail(res, op) { let b = null; try { b = await res.json(); } catch (e) { } const err = new Error((b && b.error) || ('تعذر تنفيذ الطلب (' + res.status + ')')); err.status = res.status; err.code = b && b.code; if (res.status === 401 && op !== 'login') { this.setToken(null); if (this.onUnauthorized) setTimeout(() => this.onUnauthorized(err), 0); } return err; }
+    async call(op, payload) {
+      const headers = { 'content-type': 'application/json' }; if (this.token) headers.authorization = 'Bearer ' + this.token;
+      const res = await this.req('rpc', { method: 'POST', headers, body: JSON.stringify(Object.assign({ op }, payload || {})) });
+      if (!res.ok) throw await this.fail(res, op);
+      return (await res.json()) || {};
+    }
+    serial(fn) { const p = this.q.then(fn, fn); this.q = p.catch(() => { }); return p; }
+    track(r) { if (!r || typeof r.rev !== 'number') return; if (typeof r.prevRev === 'number' && this.rev && r.prevRev !== this.rev) { this.remoteChanged = true; if (this.onRemoteChange) this.onRemoteChange(); } this.rev = r.rev; }
+    applyData(r) { this.data = Object.assign(empty(), r.data || {}); this.rev = r.rev || 0; this.remoteChanged = false; this.me = r.me || this.me; return this.data; }
+    async login(username, password) { const r = await this.call('login', { username, password }); this.setToken(r.token); this.applyData(r); return r; }
+    async load() { if (!this.token) { const e = new Error('no session'); e.status = 401; throw e; } const r = await this.call('load'); this.applyData(r); return this.data; }
+    logout() { if (this.token) this.call('audit', { entry: { action: 'logout', entity: 'users' } }).catch(() => { }); this.setToken(null); this.data = empty(); this.me = null; this.rev = 0; }
+    putRecord(coll, rec, o) { o = o || {}; return this.serial(async () => { const r = await this.call('put', { coll, rec, base: o.base || null, audit: o.audit || null }); upsert(this.data[coll], rec); this.track(r); return r; }); }
+    put(coll, rec) { return this.putRecord(coll, rec, {}); }
+    remove(coll, id, o) { o = o || {}; return this.serial(async () => { const r = await this.call('remove', { coll, id, audit: o.audit || null }); this.data[coll] = this.data[coll].filter(x => x.id !== id); this.track(r); return r; }); }
+    putSettings(s) { return this.serial(async () => { const r = await this.call('settings', { settings: s }); this.data.settings = s; this.track(r); }); }
+    appendAudit(rec) { return this.serial(() => this.call('audit', { entry: { action: rec.action, entity: rec.entity, entityId: rec.entityId, detail: rec.detail } }).catch(() => { })); }
+    async changePassword(next, current) { const r = await this.serial(() => this.call('password', { next, current })); this.setToken(r.token); this.track(r); return r; }
+    createUser(u) { return this.serial(async () => { const r = await this.call('userCreate', { user: u }); upsert(this.data.users, r.user); this.track(r); return r; }); }
+    resetPassword(id) { return this.serial(async () => { const r = await this.call('userReset', { id }); const u = this.data.users.find(x => x.id === id); if (u) u.mustChange = true; this.track(r); return r; }); }
+    saveFile(path, file) {
+      if (file.size > 4 * 1024 * 1024) return Promise.reject(new Error('حجم الملف «' + file.name + '» أكبر من 4 ميجابايت. اضغطه أو قسّمه ثم أعد الإرفاق.'));
+      return this.serial(async () => { const res = await this.req('file?path=' + encodeURIComponent(path), { method: 'POST', headers: { authorization: 'Bearer ' + this.token, 'content-type': file.type || 'application/octet-stream' }, body: file }); if (!res.ok) throw await this.fail(res, 'file'); });
+    }
+    async fileBlob(path) { const res = await this.req('file?path=' + encodeURIComponent(path), { headers: { authorization: 'Bearer ' + this.token } }); if (!res.ok) { if (res.status === 401) await this.fail(res, 'file'); return null; } return await res.blob(); }
+    async fileURL(path) { const b = await this.fileBlob(path); return b ? URL.createObjectURL(b) : null; }
+    deleteFile(path) { return this.serial(async () => { const res = await this.req('file?path=' + encodeURIComponent(path), { method: 'DELETE', headers: { authorization: 'Bearer ' + this.token } }); if (!res.ok && res.status !== 404) throw await this.fail(res, 'file'); }); }
+    async exportAll() { const r = await this.call('export'); return r.json; }
+    async importAll(json) { let payload; try { payload = JSON.parse(json); } catch (e) { throw new Error('ملف النسخة غير صالح (JSON).'); } let files = 0; if (payload && payload.files) { files = Object.keys(payload.files).length; delete payload.files; } const r = await this.serial(() => this.call('import', { payload })); if (r.token) this.setToken(r.token); if (files) r.files = files; return r; }
+    describe() { return 'الخادم السحابي — بيانات مشتركة لكل الفريق'; }
+  }
+  async function detectCloud(base) {
+    if (!/^https?:$/.test(location.protocol)) return false;
+    try { const ctl = typeof AbortController === 'function' ? new AbortController() : null; const t = setTimeout(() => { if (ctl) ctl.abort(); }, 6000); const res = await fetch((base || 'api/') + 'health', { cache: 'no-store', signal: ctl ? ctl.signal : undefined }); clearTimeout(t); if (!res.ok) return false; const j = await res.json(); return j && j.app === 'sijil-alada' ? j : false; } catch (e) { return false; }
+  }
+
   const supportsFolder = () => typeof window.showDirectoryPicker === 'function' && window.isSecureContext;
   async function pickFolder() { const h = await window.showDirectoryPicker({ mode: 'readwrite' }); await idbSet('dirHandle', h); return h; }
   const savedFolder = () => idbGet('dirHandle');
   async function ensurePermission(h, ask) { try { if ((await h.queryPermission({ mode: 'readwrite' })) === 'granted') return true; if (ask) return (await h.requestPermission({ mode: 'readwrite' })) === 'granted'; } catch (e) { } return false; }
-  return { COLLS, LocalStore, FolderStore, supportsFolder, pickFolder, savedFolder, ensurePermission, forgetFolder: () => idbDel('dirHandle'), toDataURL };
+  return { COLLS, empty, LocalStore, FolderStore, CloudStore, detectCloud, supportsFolder, pickFolder, savedFolder, ensurePermission, forgetFolder: () => idbDel('dirHandle'), toDataURL };
 })();

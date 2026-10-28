@@ -1,0 +1,8 @@
+build.py
+dist
+*.local.*
+README.md
+اقرأني أولاً.txt
+brand/logo_awqaf.png
+brand/logo_moe.png
+brand/leaf_watermark.jpg
