@@ -60,12 +60,19 @@
   async function offlinePayload(text) {
     const d = JSON.parse(text); if (!d || d.format !== 'sijil-alada-cloud') return text;
     for (const k of ['format', 'scope', 'version', 'credentials', 'logins', 'counters', 'exportedAt']) delete d[k];
+    /* حساب موجود هنا باسم المستخدم نفسه يبقى بمعرّفه المحلي، ويُستبدل معرّفه السحابي في كل النسخة (التقييمات والفرق والسجل…)، فلا يتكرر الحساب */
+    const remap = new Map(), seen = new Set(), norm = x => String(x || '').trim().toLowerCase();
     for (const u of Array.isArray(d.users) ? d.users : []) {
-      if (!u || typeof u !== 'object') continue; const cur = byId('users', u.id) || list('users').find(x => String(x.username).toLowerCase() === String(u.username || '').toLowerCase());
+      if (!u || typeof u !== 'object') continue; const name = norm(u.username);
+      if (seen.has(name)) throw new Error('النسخة تتضمن اسم المستخدم «' + u.username + '» أكثر من مرة، فلم يُستورد شيء.'); seen.add(name);
+      const cur = byId('users', u.id) || list('users').find(x => norm(x.username) === name);
+      if (cur && cur.id !== u.id) { remap.set(u.id, cur.id); u.username = cur.username; }
       if (cur && cur.hash) Object.assign(u, { salt: cur.salt, hash: cur.hash, mustChange: !!cur.mustChange }); else { u.salt = uid(); u.hash = await EV.hashPassword('123456', u.salt); u.mustChange = true; }
-      if (cur && cur.id === st.user.id) Object.assign(u, { id: cur.id, role: cur.role, active: true });
+      if (cur && cur.id === st.user.id) Object.assign(u, { role: cur.role, active: true });
       delete u.lastLoginAt;
     }
+    const fix = v => Array.isArray(v) ? v.map(fix) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [remap.get(k) || k, fix(x)])) : typeof v === 'string' && remap.has(v) ? remap.get(v) : v;
+    if (remap.size) for (const k of Object.keys(d)) d[k] = fix(d[k]);
     return JSON.stringify(d);
   }
   A['change:importBackup'] = async el => { const f = el.files[0]; if (!f) return; if (!(await EV.confirm('سيتم دمج محتوى النسخة مع البيانات الحالية (السجلات بالمعرّف نفسه تُستبدل). متابعة؟'))) return; const text = await f.text(); const r = await st.store.importAll(EV.isCloud() ? text : await offlinePayload(text)); el.value = ''; if (EV.isCloud()) { if (r && r.me && st.user) st.user.id = r.me; await EV.reload(); const c = r.counts || {}; await EV.modal({ title: 'تم الاستيراد', okText: 'تم', hideCancel: true, body: `<p>المستخدمون ${c.users || 0} · الشركات ${c.companies || 0} · المشاريع ${c.projects || 0} · العقود ${c.contracts || 0} · الدورات ${c.cycles || 0} · التقييمات ${c.evaluations || 0} · الخطابات ${c.letters || 0}</p>${r.files ? `<div class="note">لم تُنقل ملفات المرفقات (${esc(r.files)}) لأنها خارج ملف النسخة؛ أعد إرفاق المهم منها.</div>` : ''}${r.skipped ? `<div class="note warn">تُركت ${esc(r.skipped)} سجلات غير صالحة${(r.problems || []).length ? ':<br><small dir="ltr">' + r.problems.map(esc).join('<br>') + '</small>' : '.'}</div>` : ''}${(r.tempPasswords || []).length ? `<p>حسابات جديدة بكلمات مرور مؤقتة (أرسلها لأصحابها):</p><table class="tbl-plain" dir="ltr"><tbody>${r.tempPasswords.map(t => `<tr><td>${esc(t.name || '')}</td><td>${esc(t.username)}</td><td><b>${esc(t.password)}</b></td></tr>`).join('')}</tbody></table>` : ''}<p class="hint">من غيّر كلمة مروره على النسخة السحابية يحتفظ بها، ومن غيّرها في النسخة الأوفلاين يدخل بها هنا.</p>` }); return; } await EV.audit('backup_import', 'system', null); EV.toast('تم الاستيراد', 'ok'); await EV.reload(); };

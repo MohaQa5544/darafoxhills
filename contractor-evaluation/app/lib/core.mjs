@@ -136,13 +136,15 @@ function sanitize(coll, rec) {
 }
 function checkConsolidated(c, ratings) {
   if (c == null) return;
-  if (!isObj(c)) throw E.bad('نتيجة موحدة غير صالحة.');
+  if (!isObj(c) || !Array.isArray(c.axes) || c.axes.length > 40) throw E.bad('نتيجة موحدة غير صالحة.');
+  if (c.inputs != null && !(isObj(c.inputs) && Object.entries(c.inputs).every(([k, v]) => ID_RE.test(k) && (v === null || (typeof v === 'string' && v.length < 40))))) throw E.bad('نتيجة موحدة غير صالحة.');
   if (c.total != null && !isNum(c.total)) throw E.bad('نتيجة موحدة غير صالحة.');
   if (c.count != null && !(Number.isInteger(c.count) && c.count >= 0)) throw E.bad('نتيجة موحدة غير صالحة.');
   if (c.rating != null && !ratings.includes(c.rating)) throw E.bad('تصنيف غير معروف.');
   if (c.method != null && !['mean', 'weighted'].includes(c.method)) throw E.bad('طريقة توحيد غير معروفة.');
   if (c.axes != null && !(Array.isArray(c.axes) && c.axes.every(a => isObj(a) && (a.score == null || isNum(a.score)) && (a.weight == null || isNum(a.weight)) && (a.spread == null || isNum(a.spread)) && (a.n == null || Number.isInteger(a.n)) && (a.name == null || isStr(a.name, 300))))) throw E.bad('محاور النتيجة الموحدة غير صالحة.');
   if (c.evaluationIds != null && !(Array.isArray(c.evaluationIds) && c.evaluationIds.every(x => typeof x === 'string' && ID_RE.test(x)))) throw E.bad('نتيجة موحدة غير صالحة.');
+  if (c.evalWeights != null && !(isObj(c.evalWeights) && Object.entries(c.evalWeights).every(([u, w]) => ID_RE.test(u) && isNum(w)))) throw E.bad('نتيجة موحدة غير صالحة.');
 }
 /* شكل السجلات: الواجهة تفترض أن الأسماء والتواريخ نصوص وأن البنى المعروفة كائنات أو قوائم، وسجل واحد مخالف كان يكفي
    لإيقاف شاشات كل المستخدمين. ولا يُقبل اسم حقل من خصائص Object.prototype في أي عمق (toString و__proto__ وأمثالهما). */
@@ -164,7 +166,7 @@ export function checkRecord(coll, rec) {
   for (const k of Object.keys(rec)) {
     const v = rec[k]; if (v === null) continue;
     const bad = () => { throw E.bad('قيمة غير صالحة في الحقل ' + k + '.'); };
-    if (TEXT_FIELDS.has(k) || isDateField(k)) { if (typeof v !== 'string' || v.length > (k === 'bodyHtml' ? 100000 : 20000)) bad(); }
+    if (TEXT_FIELDS.has(k) || isDateField(k)) { if (typeof v !== 'string') bad(); if (v.length > (k === 'bodyHtml' ? 100000 : 20000)) throw E.bad('النص في الحقل ' + k + ' أطول من المسموح (' + (k === 'bodyHtml' ? 100000 : 20000) + ' حرف).'); }
     else if (NUM_FIELDS.has(k)) { if (!(isNum(v) || (typeof v === 'string' && v.length < 40 && (v.trim() === '' || Number.isFinite(Number(v)))))) bad(); }
     else if (LIST_FIELDS.has(k)) { if (!Array.isArray(v)) bad(); }
     else if (OBJ_FIELDS.has(k)) { if (!isObj(v)) bad(); }
@@ -178,14 +180,19 @@ function checkTemplate(t) {
   if (!Array.isArray(t.axes) || !t.axes.length || t.axes.length > 40) throw E.bad('محاور النموذج غير صالحة.');
   const axes = new Set(), items = new Set();
   for (const a of t.axes) {
-    if (!isObj(a) || typeof a.key !== 'string' || !KEY_RE.test(a.key) || axes.has(a.key) || !isStr(a.name, 300) || !Number.isFinite(Number(a.weight)) || !Array.isArray(a.items) || a.items.length > 300) throw E.bad('محور غير صالح في النموذج.');
+    if (!isObj(a) || typeof a.key !== 'string' || !KEY_RE.test(a.key) || PROTO_KEYS.has(a.key) || axes.has(a.key) || !isStr(a.name, 300) || !Number.isFinite(Number(a.weight)) || !Array.isArray(a.items) || a.items.length > 300) throw E.bad('محور غير صالح في النموذج.');
     axes.add(a.key);
-    for (const i of a.items) if (!isObj(i) || typeof i.key !== 'string' || !KEY_RE.test(i.key) || items.has(i.key) || !isStr(i.text, 3000) || (i.importance != null && !Number.isFinite(Number(i.importance))) || (i.hint != null && !isStr(i.hint, 3000))) throw E.bad('سؤال غير صالح في النموذج.'); else items.add(i.key);
+    for (const i of a.items) if (!isObj(i) || typeof i.key !== 'string' || !KEY_RE.test(i.key) || PROTO_KEYS.has(i.key) || items.has(i.key) || !isStr(i.text, 3000) || (i.importance != null && !Number.isFinite(Number(i.importance))) || (i.hint != null && !isStr(i.hint, 3000))) throw E.bad('سؤال غير صالح في النموذج.'); else items.add(i.key);
   }
 }
 function checkEvaluation(e) {
-  if (e.scores != null) for (const [k, s] of Object.entries(e.scores)) if (!KEY_RE.test(k) || !isObj(s) || (s.s != null && !isNum(s.s)) || (s.na != null && typeof s.na !== 'boolean') || (s.n != null && !isStr(s.n, 10000))) throw E.bad('درجة غير صالحة في التقييم.');
-  const c = e.computed; if (c != null && ((c.total != null && !isNum(c.total)) || (c.axes != null && !Array.isArray(c.axes)))) throw E.bad('نتيجة غير صالحة في التقييم.');
+  if (e.scores != null) for (const [k, s] of Object.entries(e.scores)) {
+    if (!KEY_RE.test(k) || PROTO_KEYS.has(k) || !isObj(s) || (s.s != null && !isNum(s.s)) || (s.na != null && typeof s.na !== 'boolean') || (s.n != null && typeof s.n !== 'string')) throw E.bad('درجة غير صالحة في التقييم (السؤال ' + k.slice(0, 40) + ').');
+    if (s.n != null && s.n.length > 10000) throw E.bad('ملاحظة السؤال ' + k.slice(0, 40) + ' أطول من 10000 حرف؛ اختصرها أو أرفق المستند بدلاً منها.');
+  }
+  /* نتيجة التقييم تقرؤها شاشات الجميع: محاور في قائمة، لكل محور مفتاح ودرجة وقائمة أسئلة */
+  const c = e.computed;
+  if (c != null && (!isObj(c) || (c.total != null && !isNum(c.total)) || !Array.isArray(c.axes) || c.axes.length > 40 || !c.axes.every(a => isObj(a) && typeof a.key === 'string' && (a.score == null || isNum(a.score)) && Array.isArray(a.items) && a.items.every(isObj)))) throw E.bad('نتيجة غير صالحة في التقييم.');
 }
 
 /* ---------- الخادم ---------- */
@@ -361,6 +368,20 @@ export class Server {
     const mine = new Set(evs.filter(e => e.evaluatorId === user.id && e.status === 'submitted').map(e => e.cycleId));
     return evs.filter(e => e.evaluatorId === user.id || (e.status === 'submitted' && (v === 'always' || (v === 'after_submit' && mine.has(e.cycleId)))));
   }
+  staleConsolidation(doc, cy) {
+    const c = cy.consolidated; const excl = new Set(cy.excluded || []);
+    const cur = doc.data.evaluations.filter(e => e.cycleId === cy.id && e.status === 'submitted' && !excl.has(e.id));
+    const got = Array.isArray(c.evaluationIds) ? c.evaluationIds.slice().sort() : null; const inputs = isObj(c.inputs) ? c.inputs : {};
+    const method = cy.method || 'mean', w = o => Object.keys(isObj(o) ? o : {}).sort().map(k => [k, o[k]]);
+    if ((c.method || 'mean') !== method || (method === 'weighted' && !same(w(c.evalWeights), w(cy.evalWeights)))) return true;
+    return !got || !same(cur.map(e => e.id).sort(), got) || (c.count != null && c.count !== cur.length) || cur.some(e => inputs[e.id] !== (e.updatedAt || null));
+  }
+  /* دورة المرفق (من سجله أو من تقييمه) ومدى قفلها */
+  attLock(doc, a) {
+    const ev = a.evaluationId ? doc.data.evaluations.find(e => e.id === a.evaluationId) : null;
+    const cy = doc.data.cycles.find(c => c.id === (a.cycleId || (ev && ev.cycleId)));
+    return { ev, locked: !!cy && (cy.status === 'approved' || cy.status === 'closed') };
+  }
   onTeam(doc, user, contractId) { const k = doc.data.contracts.find(c => c.id === contractId); return !!k && (k.leadEngineer === user.id || (k.evaluators || []).includes(user.id)); }
 
   /* ---------- قواعد الكتابة ---------- */
@@ -398,13 +419,11 @@ export class Server {
         if (!Object.keys(this.labels.cycleStatus || { open: 1, consolidated: 1, approved: 1, closed: 1 }).includes(rec.status)) throw E.bad('حالة دورة غير معروفة.');
         checkConsolidated(rec.consolidated, Object.keys(this.labels.rating || {}).concat(['none', 'negative']));
         if (rec.objection != null && !isObj(rec.objection)) throw E.bad('بيانات التظلم غير صالحة.');
-        /* النتيجة الموحدة تُحسب من التقييمات المقدَّمة الحالية غير المستبعدة كلها؛ نسخة قديمة من الصفحة تُرفض */
-        if (rec.consolidated && !same(prev ? prev.consolidated : null, rec.consolidated)) {
-          const excl = new Set(rec.excluded || []);
-          const want = doc.data.evaluations.filter(e => e.cycleId === rec.id && e.status === 'submitted' && !excl.has(e.id)).map(e => e.id).sort();
-          const got = Array.isArray(rec.consolidated.evaluationIds) ? rec.consolidated.evaluationIds.slice().sort() : null;
-          if (!got || !same(want, got) || (rec.consolidated.count != null && rec.consolidated.count !== want.length)) throw E.staleInputs();
-        }
+        /* النتيجة الموحدة تُحسب من التقييمات المقدَّمة الحالية غير المستبعدة كلها، وبصيغتها الحالية (وقت آخر تعديل لكل تقييم):
+           تُفحص عند التوحيد وعند الاعتماد، فلا يُحفظ ولا يُعتمد توحيد قديم (بعد إعادة تقييم وتقديمه مثلاً) */
+        const entering = s => rec.status === s && (!prev || prev.status !== s);
+        if (rec.consolidated && (!same(prev ? prev.consolidated : null, rec.consolidated) || entering('approved')) && this.staleConsolidation(doc, rec)) throw E.staleInputs();
+        if (entering('closed') && me.role !== 'admin') throw E.forbid('إقفال الدورة دون اعتماد لمدير النظام فقط.');
         if (!prev) {
           if (r < 2) {
             if (k.leadEngineer !== me.id) throw E.forbid('فتح دورات التقييم لرئيس القسم أو المهندس المسؤول عن العقد.');
@@ -455,6 +474,7 @@ export class Server {
         return;
       }
       case 'attachments': {
+        if (me.role !== 'admin' && (this.attLock(doc, rec).locked || (prev && this.attLock(doc, prev).locked))) throw E.forbid('مستندات الدورة المعتمدة مقفلة.');
         if (prev) {
           if (r < 2) throw E.forbid();
           if (rec.path !== prev.path || rec.contractId !== prev.contractId || rec.uploadedBy !== prev.uploadedBy) throw E.bad('لا يُغيَّر ملف المرفق أو عقده أو رافعه.');
@@ -466,7 +486,7 @@ export class Server {
         /* سجل مرفق لا يُنشأ لملف موجود (ولا لإخطار عقد موقّع)، وإلا صار وسيلة لحذف ملفات الآخرين */
         if (doc.data.attachments.some(a => a.path === rec.path) || doc.data.contracts.some(c => c.noticeFile === rec.path)) throw E.bad('المرفق مسجل من قبل.');
         if (r < 2 && !this.onTeam(doc, me, rec.contractId)) throw E.forbid('لست ضمن فريق تقييم هذا العقد.');
-        if (rec.evaluationId) { const e = doc.data.evaluations.find(x => x.id === rec.evaluationId); if (!e) throw E.bad('التقييم غير موجود.'); if (e.contractId !== rec.contractId) throw E.bad('التقييم لا يتبع هذا العقد.'); if (e.evaluatorId !== me.id && r < 2) throw E.forbid(); }
+        if (rec.evaluationId) { const e = doc.data.evaluations.find(x => x.id === rec.evaluationId); if (!e) throw E.bad('التقييم غير موجود.'); if (e.contractId !== rec.contractId) throw E.bad('التقييم لا يتبع هذا العقد.'); if (e.evaluatorId !== me.id && r < 2) throw E.forbid(); if (r < 2 && e.status === 'submitted') throw E.forbid('قُدِّم التقييم، فلا تُضاف إليه مستندات إلا بعد إعادته.'); }
         else if (r < 2) throw E.forbid();
         return;
       }
@@ -477,7 +497,13 @@ export class Server {
     const r = rankOf(me);
     if (r < 1) throw E.forbid('حساب المتابعة للاطلاع فقط ولا يملك صلاحية التعديل.');
     switch (coll) {
-      case 'attachments': if (prev.uploadedBy !== me.id && r < 2) throw E.forbid(); return;
+      case 'attachments': {
+        if (prev.uploadedBy !== me.id && r < 2) throw E.forbid();
+        const { ev, locked } = this.attLock(doc, prev);
+        if (locked && me.role !== 'admin') throw E.forbid('مستندات الدورة المعتمدة مقفلة.');
+        if (r < 2 && ev && ev.status === 'submitted') throw E.forbid('قُدِّم التقييم، فلا تُحذف مستنداته إلا بعد إعادته.');
+        return;
+      }
       case 'cycles': if (r < 2) throw E.forbid(); if (prev.status !== 'open' || doc.data.evaluations.some(e => e.cycleId === prev.id)) throw E.bad('لا تُحذف إلا دورة مفتوحة بلا تقييمات.'); return;
       case 'companies': case 'projects': case 'contracts': case 'templates': case 'letters': case 'evaluations': if (me.role !== 'admin') throw E.forbid('الحذف لمدير النظام فقط.'); return;
     }
@@ -779,7 +805,11 @@ export class Server {
         const r = rankOf(user); const att = doc.data.attachments.find(a => a.path === path) || null; const notice = doc.data.contracts.some(c => c.noticeFile === path);
         if (m === 'GET') { if (!this.canSeeFile(doc, user, path, att)) throw E.notFound('الملف غير موجود.'); return { user, att }; }
         if (r < 1) throw E.forbid('حساب المتابعة للاطلاع فقط ولا يملك صلاحية التعديل.');
-        if (m === 'DELETE') { if (notice ? r < 2 : att ? (att.uploadedBy !== user.id && r < 2) : r < 2) throw E.forbid(); return { user, att }; }
+        if (m === 'DELETE') {
+          if (notice ? r < 2 : att ? (att.uploadedBy !== user.id && r < 2) : r < 2) throw E.forbid();
+          if (att) { const { ev, locked } = this.attLock(doc, att); if ((locked && user.role !== 'admin') || (r < 2 && ev && ev.status === 'submitted')) throw E.forbid('مستندات هذا التقييم مقفلة.'); }
+          return { user, att };
+        }
         const k = doc.data.contracts.find(c => c.id === path.split('/')[1]); if (!k) throw E.bad('العقد غير موجود.');
         if (r < 2 && !this.onTeam(doc, user, k.id)) throw E.forbid('لست ضمن فريق تقييم هذا العقد.');
         if (att || notice) throw E.exists();

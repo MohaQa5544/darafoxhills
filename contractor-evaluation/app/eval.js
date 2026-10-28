@@ -13,9 +13,9 @@
     return `<div class="chips" role="group" aria-label="الدرجة">${[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => { const s = B.scaleFor(n); return `<button type="button" class="chip ${v === n ? 'on' : ''}" style="--c:${s.color}" data-act="score" data-item="${esc(it.key)}" data-val="${n}" ${editable ? '' : 'disabled'} title="${esc(s.name)}">${n}</button>`; }).join('')}<button type="button" class="chip na ${v === 'na' ? 'on' : ''}" data-act="score" data-item="${esc(it.key)}" data-val="na" ${editable ? '' : 'disabled'}>غير منطبق</button></div><div class="scale-hint" id="sh_${esc(it.key)}">${v != null && v !== 'na' ? `<b style="color:${B.scaleFor(v).color}">${B.scaleFor(v).name}:</b> ${esc(B.scaleFor(v).text)} <small>(الدليل: ${esc(B.scaleFor(v).evidence)})</small>` : (v === 'na' ? 'يُستبعد هذا البند ويُعاد توزيع وزنه. اذكر السبب في الملاحظة.' : '')}</div>`;
   }
   function itemBlock(it, idx, e, editable, atts) {
-    const sc = e.scores[it.key] || {}; const mine = atts.filter(a => a.itemKey === it.key);
+    const sc = (Object.prototype.hasOwnProperty.call(e.scores || {}, it.key) && e.scores[it.key]) || {}; const mine = atts.filter(a => a.itemKey === it.key);
     return `<div class="item ${it.critical ? 'critical' : ''}" id="it_${esc(it.key)}"><div class="item-head"><span class="item-no">${idx}</span><div class="item-text"><p>${esc(it.text)} ${it.critical ? '<span class="crit">بند حاسم</span>' : ''} ${it.importance > 1 ? `<span class="imp">أهمية ×${esc(it.importance)}</span>` : ''}</p>${it.hint ? `<small class="hint">الدليل المقترح: ${esc(it.hint)}</small>` : ''}</div></div>${chips(it, sc, editable)}
-      <div class="item-foot"><textarea class="note-in" placeholder="ملاحظة / مرجع الدليل (إلزامية للدرجات الطرفية)" data-input="note" data-item="${esc(it.key)}" rows="1" ${editable ? '' : 'disabled'}>${esc(sc.n || '')}</textarea>
+      <div class="item-foot"><textarea class="note-in" placeholder="ملاحظة / مرجع الدليل (إلزامية للدرجات الطرفية)" data-input="note" data-item="${esc(it.key)}" rows="1" maxlength="10000" ${editable ? '' : 'disabled'}>${esc(sc.n || '')}</textarea>
       <div class="atts">${mine.map(a => `<span class="att"><button class="linkbtn" data-act="openFile" data-path="${esc(a.path)}" data-name="${esc(a.name)}">📎 ${esc(a.name)}</button>${editable ? `<button class="icon-btn" data-act="delAtt" data-id="${esc(a.id)}" title="حذف">✕</button>` : ''}</span>`).join('')}${editable ? `<label class="btn small ghost">📎 إرفاق<input type="file" multiple hidden data-change="attach" data-item="${esc(it.key)}"></label>` : ''}</div></div></div>`;
   }
   function panel(e, t, w, k, cy) {
@@ -34,7 +34,7 @@
     let idx = 0;
     EV.page(`<div class="eval-head card"><div><h2>${esc(comp.name_ar)} <small>${L.role[k.role]}</small></h2><p class="muted">${esc(EV.projectName(k.projectId))} · ${L.cycleType[cy.type]} · ${esc(cy.label)} · النموذج: ${esc(t.name)} (إصدار ${esc(t.version)})</p><p>المقيّم: <b>${esc(EV.userName(e.evaluatorId))}</b> · ${badge(L.evalStatus[e.status], e.status === 'submitted' ? 'ok' : 'warn')}${e.submittedAt ? ` · قُدّم في ${fmtDate(e.submittedAt)}` : ''}</p>${e.status === 'returned' && e.returnedNote ? `<div class="note warn">أُعيد إليك للمراجعة: ${esc(e.returnedNote)}</div>` : ''}</div><div class="row gap"><a class="btn" href="#/cycle/${esc(cy.id)}">المقارنة</a><a class="btn" href="#/contract/${esc(k.id)}">العقد</a>${editable ? `<button class="btn primary" data-act="submitEval">تقديم التقييم</button>` : ''}</div></div>
       <div class="eval-layout"><div class="eval-main">${t.axes.map((ax, ai) => `<section class="axis card" id="ax_${esc(ax.key)}"><div class="axis-head"><h3>${ai + 1} · ${esc(ax.name)}</h3><span class="wt">الوزن ${esc(w[ax.key])}%</span><span class="axis-score" id="as_${esc(ax.key)}"></span></div>${ax.items.filter(i => i.enabled !== false).map(it => itemBlock(it, ++idx, e, editable, atts)).join('')}</section>`).join('')}
-        <section class="card"><h3>الخلاصة</h3><div class="grid2">${field('نقاط القوة', `<textarea rows="3" data-input="summary" data-f="strengths" ${editable ? '' : 'disabled'}>${esc(e.strengths || '')}</textarea>`)}${field('نقاط الضعف', `<textarea rows="3" data-input="summary" data-f="weaknesses" ${editable ? '' : 'disabled'}>${esc(e.weaknesses || '')}</textarea>`)}${field('توصية المقيّم', `<select data-change="summary" data-f="recommendation" ${editable ? '' : 'disabled'}><option value="">— اختر —</option>${opts(L.recommendation, e.recommendation)}</select>`)}</div>${editable ? `<div class="row gap"><button class="btn primary big" data-act="submitEval">تقديم التقييم</button><span class="muted" id="save-state">يُحفظ تلقائياً</span></div>` : ''}</section></div>
+        <section class="card"><h3>الخلاصة</h3><div class="grid2">${field('نقاط القوة', `<textarea rows="3" data-input="summary" data-f="strengths" maxlength="20000" ${editable ? '' : 'disabled'}>${esc(e.strengths || '')}</textarea>`)}${field('نقاط الضعف', `<textarea rows="3" data-input="summary" data-f="weaknesses" maxlength="20000" ${editable ? '' : 'disabled'}>${esc(e.weaknesses || '')}</textarea>`)}${field('توصية المقيّم', `<select data-change="summary" data-f="recommendation" ${editable ? '' : 'disabled'}><option value="">— اختر —</option>${opts(L.recommendation, e.recommendation)}</select>`)}</div>${editable ? `<div class="row gap"><button class="btn primary big" data-act="submitEval">تقديم التقييم</button><span class="muted" id="save-state">يُحفظ تلقائياً</span></div>` : ''}</section></div>
         <aside class="eval-side" id="eval-side">${panel(e, t, w, k, cy)}</aside></div>`, { title: 'تقييم ' + comp.name_ar, wide: true });
     refreshAxisScores();
   });
@@ -57,7 +57,7 @@
     saving = (async () => {
       for (const rec of [...dirty]) {
         dirty.delete(rec); const sig = sigOf(rec);
-        if (savedSig.get(rec) === sig) continue;
+        if (!st.user || rec.evaluatorId !== st.user.id || savedSig.get(rec) === sig) continue;
         try { await EV.save('evaluations', rec, null); savedSig.set(rec, sig); retries = 0; }
         catch (err) {
           const transient = err.network || err.status === 429 || err.status >= 500;
@@ -65,7 +65,8 @@
           if (err.status === 409 || err.status === 403) { retries = 0; EV.toast('لم يُحفظ التقييم: ' + err.message, 'bad'); if (EV.isCloud()) setTimeout(() => EV.reload().catch(() => { }), 800); continue; }   // تُعاد البيانات من الخادم
           dirty.add(rec);                                                       // يبقى معلّقاً حتى يُحفظ: لا يُنسى ولا يُعرض «تم الحفظ»
           if (transient && retries < 6) { retries++; EV.toast('تعذر الحفظ مؤقتاً، ستُعاد المحاولة تلقائياً', 'warn'); clearTimeout(retryTimer); retryTimer = setTimeout(flushSave, err.status === 429 ? 30000 : 3000 * retries); }
-          else { retries = 0; EV.toast('لم يُحفظ التقييم: ' + err.message + ' — سيُعاد إرساله مع تعديلك التالي.', 'bad'); }
+          else if (transient) { retries = 0; EV.toast('تعذر حفظ التقييم بعد عدة محاولات (' + err.message + '). سيُعاد إرساله مع تعديلك التالي أو عند الضغط على «تحديث».', 'bad'); }
+          else { retries = 0; EV.toast('لم يُحفظ التقييم: ' + err.message, 'bad'); }          // خطأ في المحتوى نفسه: يبقى معلّقاً حتى يصحّحه المقيّم
         }
       }
       saveState(dirty.size || held.size ? '⚠️ لم يُحفظ بعد' : 'تم الحفظ ' + new Date().toLocaleTimeString('ar-QA-u-nu-latn', { hour: '2-digit', minute: '2-digit' }));
@@ -79,8 +80,9 @@
     let n = 0; for (const rec of [...held]) { held.delete(rec); if (rec.evaluatorId === userId) { dirty.add(rec); n++; } }
     if (!n) return; await flushSave(); EV.render();
   };
-  EV.dropHeld = () => { held.clear(); };
-  const safeKey = k => typeof k === 'string' && /^[a-z][a-z0-9_]{0,40}$/.test(k);    // مفاتيح أسئلة آمنة فقط (لا __proto__ ونحوه)
+  /* عند الخروج (أو تخلي المستخدم عن تعديلاته) لا يبقى شيء منها في الطابور فيُرسل لاحقاً باسم من يدخل بعده */
+  EV.onLogout(() => { held.clear(); dirty.clear(); clearTimeout(saveTimer); clearTimeout(retryTimer); retries = 0; cur = null; });
+  const safeKey = k => typeof k === 'string' && /^[a-z][a-z0-9_]{0,40}$/.test(k) && !(k in Object.prototype);    // مفاتيح أسئلة آمنة فقط (لا __proto__ ولا constructor ونحوهما)
   A.score = el => { const { e, t } = cur; if (!canEdit(e)) return; const key = el.dataset.item, v = el.dataset.val; if (!safeKey(key)) return; const sc = e.scores[key] = e.scores[key] || {}; if (v === 'na') { sc.na = !sc.na; sc.s = null; } else { sc.na = false; sc.s = Number(v); } const it = t.axes.flatMap(a => a.items).find(i => i.key === key); const box = el.closest('.item'); const sel = box.querySelector('.chips'); sel.outerHTML = chips(it, sc, true).replace(/<div class="scale-hint"[\s\S]*$/, ''); const hint = box.querySelector('.scale-hint'); const nh = document.createElement('div'); nh.innerHTML = chips(it, sc, true); hint.replaceWith(nh.querySelector('.scale-hint')); refreshAxisScores(); scheduleSave(); };
   A['input:note'] = el => { if (!safeKey(el.dataset.item)) return; const sc = cur.e.scores[el.dataset.item] = cur.e.scores[el.dataset.item] || {}; sc.n = el.value; el.style.height = 'auto'; el.style.height = (el.scrollHeight) + 'px'; refreshAxisScores(); scheduleSave(); };
   A['input:summary'] = el => { cur.e[el.dataset.f] = el.value; scheduleSave(); };
@@ -110,7 +112,12 @@
     const before = { computed: e.computed, status: e.status, submittedAt: e.submittedAt, returnedNote: e.returnedNote };
     e.computed = r; e.status = 'submitted'; e.submittedAt = EV.nowISO(); e.returnedNote = '';
     try { await EV.save('evaluations', e, 'evaluation_submit'); }
-    catch (err) { Object.keys(before).forEach(x => { if (before[x] === undefined) delete e[x]; else e[x] = before[x]; }); if (err.network || err.status >= 500) scheduleSave(); EV.render(); throw err; }
+    catch (err) {
+      Object.keys(before).forEach(x => { if (before[x] === undefined) delete e[x]; else e[x] = before[x]; });
+      if (err.status === 401) held.add(e);                                          // يُحفظ مسودةً بعد إعادة الدخول
+      else if (err.status !== 409 && err.status !== 403) { dirty.add(e); if (err.network || err.status === 429 || err.status >= 500) { clearTimeout(saveTimer); saveTimer = setTimeout(flushSave, 3000); } }
+      EV.render(); throw err;
+    }
     savedSig.set(e, sigOf(e)); EV.toast('تم تقديم التقييم', 'ok'); EV.navigate('#/cycle/' + cy.id);
   };
 })(window.EV);

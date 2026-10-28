@@ -143,7 +143,8 @@ await t('follow-up account sees everything and can change nothing', async () => 
 await t('only approvers approve; only admin reopens; company status for approvers', async () => {
   let d = await load('head'); let c = d.cycles.find(x => x.id === cy1.id);
   eq((await put('head', 'cycles', Object.assign({}, c, { status: 'consolidated', consolidated: { total: 7.5, rating: 'good', axes: [], evaluationIds: [], count: 0 }, updatedAt: now() }), c.updatedAt)).status, 409, 'consolidation that leaves out a submitted evaluation');
-  const cons = Object.assign({}, c, { status: 'consolidated', consolidated: { total: 7.5, rating: 'good', axes: [], evaluationIds: [ev1.id], count: 1 }, reviewedBy: U.head, updatedAt: now() }); eq((await put('head', 'cycles', cons, c.updatedAt)).status, 200);
+  const e1 = d.evaluations.find(x => x.id === ev1.id);
+  const cons = Object.assign({}, c, { status: 'consolidated', consolidated: { total: 7.5, rating: 'good', axes: [], evaluationIds: [ev1.id], count: 1, inputs: { [ev1.id]: e1.updatedAt } }, reviewedBy: U.head, updatedAt: now() }); eq((await put('head', 'cycles', cons, c.updatedAt)).status, 200);
   eq((await put('head', 'cycles', Object.assign({}, cons, { status: 'approved', approvedBy: U.head, updatedAt: now() }), cons.updatedAt)).status, 403);
   await first('waqf', 'temp-waqf1', 'Waqf#2026');
   const appr = Object.assign({}, cons, { status: 'approved', approvedBy: U.waqf, approvedAt: now(), consequence: 'improvement', updatedAt: now() }); eq((await put('waqf', 'cycles', appr, cons.updatedAt)).status, 200);
@@ -324,7 +325,7 @@ await t('an approved cycle is locked: only the objection changes, and only appro
   const cy = { id: randomUUID(), contractId: k1.id, type: 'interim', label: 'دورة القفل', status: 'open', method: 'mean', excluded: [], evalWeights: {} }; eq((await put('head', 'cycles', cy)).status, 200);
   const ev = { id: randomUUID(), cycleId: cy.id, contractId: k1.id, evaluatorId: U.eng1, status: 'submitted', scores: { c1_1: { s: 6 } }, computed: { total: 6, axes: [] }, submittedAt: now() }; eq((await put('eng1', 'evaluations', ev)).status, 200);
   const c = (await load('head')).cycles.find(x => x.id === cy.id);
-  const cons = Object.assign({}, c, { status: 'consolidated', consolidated: { total: 6, rating: 'acceptable', axes: [], evaluationIds: [ev.id], count: 1, method: 'mean' }, updatedAt: now() }); eq((await put('head', 'cycles', cons, c.updatedAt)).status, 200);
+  const cons = Object.assign({}, c, { status: 'consolidated', consolidated: { total: 6, rating: 'acceptable', axes: [], evaluationIds: [ev.id], count: 1, method: 'mean', inputs: { [ev.id]: ev.updatedAt } }, updatedAt: now() }); eq((await put('head', 'cycles', cons, c.updatedAt)).status, 200);
   const appr = Object.assign({}, cons, { status: 'approved', approvedBy: U.waqf, approvedAt: now(), consequence: 'improvement', updatedAt: now() }); eq((await put('waqf', 'cycles', appr, cons.updatedAt)).status, 200);
   eq((await put('head', 'cycles', Object.assign({}, appr, { consolidated: Object.assign({}, appr.consolidated, { total: 9.8, rating: 'excellent' }), updatedAt: now() }), appr.updatedAt)).status, 403, 'section head rewrote an approved result');
   eq((await put('head', 'cycles', Object.assign({}, appr, { status: 'closed', updatedAt: now() }), appr.updatedAt)).status, 403, 'approved → closed by a section head');
@@ -334,6 +335,38 @@ await t('an approved cycle is locked: only the objection changes, and only appro
   const decided = by => Object.assign({}, obj, { objection: Object.assign({}, obj.objection, { outcome: 'rejected', decision: 'رفض', decidedBy: by, decidedAt: now() }), updatedAt: now() });
   eq((await put('head', 'cycles', decided(U.head), obj.updatedAt)).status, 403, 'section head decided an objection');
   eq((await put('waqf', 'cycles', decided(U.waqf), obj.updatedAt)).status, 200, 'approver decides the objection');
+});
+await t('an outdated consolidation is refused, can be redone, and locks the evidence once approved', async () => {
+  const cy = { id: randomUUID(), contractId: k1.id, type: 'interim', label: 'دورة إعادة التوحيد', status: 'open', method: 'mean', excluded: [], evalWeights: {} }; eq((await put('head', 'cycles', cy)).status, 200);
+  const ev = { id: randomUUID(), cycleId: cy.id, contractId: k1.id, evaluatorId: U.eng1, status: 'submitted', scores: { c1_1: { s: 6 } }, computed: { total: 6, axes: [] }, submittedAt: now() }; eq((await put('eng1', 'evaluations', ev)).status, 200);
+  const consOf = e => ({ total: e.computed.total, rating: 'acceptable', axes: [], evaluationIds: [e.id], count: 1, method: 'mean', evalWeights: {}, inputs: { [e.id]: e.updatedAt } });
+  const c = (await load('head')).cycles.find(x => x.id === cy.id);
+  let r = await put('head', 'cycles', Object.assign({}, c, { status: 'consolidated', consolidated: Object.assign(consOf(ev), { inputs: { [ev.id]: '2020-01-01T00:00:00.000Z' } }), updatedAt: now() }), c.updatedAt); eq(r.status, 409, 'consolidation of an older version of the evaluation'); eq(r.body.code, 'stale_inputs');
+  const cons = Object.assign({}, c, { status: 'consolidated', consolidated: consOf(ev), updatedAt: now() }); eq((await put('head', 'cycles', cons, c.updatedAt)).status, 200);
+  const ret = Object.assign({}, ev, { status: 'returned', returnedNote: 'راجع البند', returnedBy: U.head, updatedAt: now() }); eq((await put('head', 'evaluations', ret, ev.updatedAt)).status, 200, 'returned while consolidated');
+  const p = `attachments/${k1.id}/beef0001__دليل.pdf`; eq(await upload(S.eng1, p, Buffer.from('%PDF-1.4 evidence'), 'application/pdf'), 200);
+  const att = { id: randomUUID(), contractId: k1.id, cycleId: cy.id, evaluationId: ev.id, itemKey: 'c1_1', path: p, name: 'دليل.pdf', size: 17, mime: 'application/pdf', uploadedBy: U.eng1 }; eq((await put('eng1', 'attachments', att)).status, 200, 'evidence added to a returned evaluation');
+  const re = Object.assign({}, ret, { status: 'submitted', scores: { c1_1: { s: 9 } }, computed: { total: 9, axes: [] }, submittedAt: now(), updatedAt: now() }); eq((await put('eng1', 'evaluations', re, ret.updatedAt)).status, 200, 'resubmitted');
+  const appr = x => Object.assign({}, x, { status: 'approved', approvedBy: U.waqf, approvedAt: now(), consequence: 'improvement', updatedAt: now() });
+  r = await put('waqf', 'cycles', appr(cons), cons.updatedAt); eq(r.status, 409, 'approval of a consolidation made before the resubmission'); eq(r.body.code, 'stale_inputs');
+  const redo = Object.assign({}, cons, { consolidated: consOf(re), updatedAt: now() }); eq((await put('head', 'cycles', redo, cons.updatedAt)).status, 200, 're-consolidation of a consolidated cycle');
+  const m = Object.assign({}, redo, { method: 'weighted', updatedAt: now() }); eq((await put('head', 'cycles', m, redo.updatedAt)).status, 200, 'method changed after the consolidation');
+  eq((await put('waqf', 'cycles', appr(m), m.updatedAt)).status, 409, 'approval after the method changed');
+  const back = Object.assign({}, m, { method: 'mean', updatedAt: now() }); eq((await put('head', 'cycles', back, m.updatedAt)).status, 200);
+  const ok2 = appr(back); eq((await put('waqf', 'cycles', ok2, back.updatedAt)).status, 200, 'approval of the current consolidation');
+  const p2 = `attachments/${k1.id}/beef0002__لاحق.pdf`; eq(await upload(S.head, p2, Buffer.from('%PDF-1.4 late'), 'application/pdf'), 200);
+  eq((await put('head', 'attachments', { id: randomUUID(), contractId: k1.id, cycleId: cy.id, path: p2, name: 'لاحق.pdf', size: 13, mime: 'application/pdf', uploadedBy: U.head })).status, 403, 'evidence added to an approved cycle');
+  eq((await rpc('remove', { coll: 'attachments', id: att.id }, S.eng1)).status, 403, 'uploader removed evidence of an approved cycle');
+  eq((await rpc('remove', { coll: 'attachments', id: att.id }, S.head)).status, 403, 'section head removed evidence of an approved cycle');
+  eq((await fetch(BASE + 'file?path=' + encodeURIComponent(p), { method: 'DELETE', headers: { authorization: 'Bearer ' + S.eng1 } })).status, 403, 'file of an approved cycle deleted directly');
+  eq((await download(S.head, p)).status, 200, 'evidence still there');
+});
+await t('closing a cycle without approval is for the admin only', async () => {
+  const cy = { id: randomUUID(), contractId: k1.id, type: 'interim', label: 'دورة الإقفال', status: 'open', method: 'mean', excluded: [], evalWeights: {} }; eq((await put('head', 'cycles', cy)).status, 200);
+  const c = (await load('head')).cycles.find(x => x.id === cy.id);
+  eq((await put('head', 'cycles', Object.assign({}, c, { status: 'closed', updatedAt: now() }), c.updatedAt)).status, 403, 'section head closed a cycle');
+  eq((await put('waqf', 'cycles', Object.assign({}, c, { status: 'closed', updatedAt: now() }), c.updatedAt)).status, 403, 'approver closed a cycle');
+  eq((await put('admin', 'cycles', Object.assign({}, c, { status: 'closed', updatedAt: now() }), c.updatedAt)).status, 200, 'admin closes');
 });
 await t('a batch saves several records together or not at all', async () => {
   const c = (await load('admin')).companies.find(x => x.id === comp.id);
@@ -362,9 +395,16 @@ await t('malformed records are refused before they can break other users\' scree
   eq((await put('head', 'companies', { id: randomUUID(), name_ar: 'شركة', roles: ['contractor'], extra: { nested: { constructor: 1 } } })).status, 400, 'prototype key in a nested object');
   eq((await rpc('put', { coll: 'projects', rec: JSON.parse('{"id":"' + randomUUID() + '","name":"x","__proto__":{"admin":true}}') }, S.head)).status, 400, '__proto__ key');
   eq((await put('eng1', 'evaluations', { id: randomUUID(), cycleId: cy1.id, contractId: k1.id, evaluatorId: U.eng1, status: 'draft', scores: { c1_1: { s: '7' } } })).status, 400, 'score as text');
+  const evBad = x => Object.assign({ id: randomUUID(), cycleId: cy1.id, contractId: k1.id, evaluatorId: U.eng1, status: 'draft', scores: {} }, x);
+  let r = await put('eng1', 'evaluations', evBad({ computed: { total: 5, axes: [null] } })); eq(r.status, 400, 'empty axis in the result'); ok(/نتيجة غير صالحة/.test(r.body.error), r.body.error);
+  eq((await put('eng1', 'evaluations', evBad({ computed: { total: 5, axes: [{ key: 'a1', score: 5, items: 'x' }] } }))).status, 400, 'result items not a list');
+  r = await put('eng1', 'evaluations', evBad({ scores: { constructor: { s: 5 } } })); eq(r.status, 400, 'constructor as a question key'); ok(/constructor/.test(r.body.error), r.body.error);
+  r = await put('eng1', 'evaluations', evBad({ scores: { c1_1: { s: 5, n: 'x'.repeat(10001) } } })); eq(r.status, 400, 'note over 10000 characters'); ok(/10000/.test(r.body.error) && /c1_1/.test(r.body.error), r.body.error);
+  eq((await put('head', 'cycles', Object.assign({}, cy, { id: randomUUID(), consolidated: { total: 5, axes: [], inputs: { 'not an id!': 'x' } } }))).status, 400, 'consolidation fingerprint with a bad key');
   const t0 = (await load('waqf')).templates[0];
   eq((await put('waqf', 'templates', Object.assign({}, t0, { id: randomUUID(), version: 99, axes: [Object.assign({}, t0.axes[0], { items: [Object.assign({}, t0.axes[0].items[0], { key: '__proto__' })] })] }))).status, 400, 'question key __proto__');
   eq((await put('waqf', 'templates', Object.assign({}, t0, { id: randomUUID(), version: 99, axes: [Object.assign({}, t0.axes[0], { key: 'Bad Key' })] }))).status, 400, 'axis key with spaces');
+  eq((await put('waqf', 'templates', Object.assign({}, t0, { id: randomUUID(), version: 99, axes: [Object.assign({}, t0.axes[0], { key: 'constructor' })] }))).status, 400, 'axis key constructor');
   eq((await rpc('settings', { settings: JSON.parse('{"appName":"x","__proto__":{"polluted":1}}') }, S.admin)).status, 400, 'settings with __proto__');
 });
 await t('the logout audit entry ignores text sent by the browser', async () => {

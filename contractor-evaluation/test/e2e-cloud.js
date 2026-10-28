@@ -67,6 +67,17 @@ const bigFile = { name: 'ملف كبير.bin', mimeType: 'application/octet-stre
     await page.fill(':nth-match(.item, 1) textarea.note-in', 'ملاحظة تُحفظ عند المغادرة'); await page.click('.eval-head a[href^="#/contract/"]'); await page.waitForTimeout(1500);
     const saved = await page.evaluate(async () => { const r = await window.EV.state.store.call('load'); const e = r.data.evaluations.find(x => x.evaluatorId === r.me); return !!e && Object.values(e.scores || {}).some(s => s && s.n === 'ملاحظة تُحفظ عند المغادرة'); }); if (!saved) throw new Error('مغادرة شاشة التقييم لم تحفظ التعديل المعلّق');
     await page.goBack(); await page.waitForSelector('.eval-layout'); await page.click('.eval-head [data-act="submitEval"]'); await page.waitForSelector('#modal'); await modalOk(); await page.waitForSelector('table.compare'); await page.click('[data-act="consolidate"]'); await page.waitForSelector('#modal #mf'); await modalOk(); await page.waitForSelector('text=بانتظار الاعتماد'); await snap('03-compare'); });
+  await step('تقييم أُعيد وقُدّم بعد التوحيد: التوحيد القديم لا يُعتمد، ويُعاد التوحيد', async () => {
+    const ids = await page.evaluate(() => { const EV = window.EV; const a = EV.state.data.users.find(u => u.username === 'admin'); const e = EV.state.data.evaluations.find(x => x.evaluatorId === a.id); return { ev: e.id, cy: e.cycleId }; });
+    await page.click(`[data-act="returnEval"][data-id="${ids.ev}"]`); await page.waitForSelector('#modal #mf'); await page.fill('#mf textarea[name=note]', 'راجع البند الأول'); await modalOk(); await page.waitForSelector('text=النتيجة الموحدة أدناه قديمة');
+    const ctxB = await newCtx(); const pB = await ctxB.newPage(); watch(pB, 'B'); await pB.goto(URL); await login('admin', 'Admin#2026', pB); await pB.waitForSelector('.kpis');
+    await pB.goto(URL + '#/eval/' + ids.ev); await pB.waitForSelector('.eval-layout'); await pB.click('.eval-head [data-act="submitEval"]'); await pB.waitForSelector('#modal'); await modalOk(pB); await pB.waitForSelector('table.compare');
+    if (!(await pB.$('text=النتيجة الموحدة أدناه قديمة')) || await pB.$('[data-act="approveCycle"]')) throw new Error('التوحيد القديم معروض للاعتماد بعد إعادة التقديم');
+    const r = await pB.evaluate(async id => { const EV = window.EV; try { await EV.update('cycles', EV.byId('cycles', id), c => { Object.assign(c, { status: 'approved', approvedBy: EV.state.user.id, approvedAt: EV.nowISO(), consequence: 'improvement' }); }, 'cycle_approve'); return 'approved'; } catch (e) { return e.status + ' ' + e.message; } }, ids.cy);
+    if (!/^409/.test(r)) throw new Error('الخادم قبل اعتماد توحيد قديم: ' + r); await ctxB.close();
+    await page.click('[data-act="reload"]'); await page.waitForTimeout(800); await page.click('[data-act="consolidate"]'); await page.waitForSelector('#modal #mf'); await modalOk(); await page.waitForSelector('text=بانتظار الاعتماد');
+    if (await page.$('text=النتيجة الموحدة أدناه قديمة')) throw new Error('بقي تنبيه التوحيد القديم بعد إعادة التوحيد');
+  });
   await step('اعتماد رئيس قسم تنمية الوقف', async () => { await logout(); await login('waqf', 'temp-waqf1'); await changePw('Waqf#2026'); await page.waitForSelector('.kpis'); await page.click('a[href="#/projects"]'); await page.waitForTimeout(300); await page.click('a[href^="#/contract/"]'); await page.waitForTimeout(300); await page.click('a[href^="#/cycle/"]'); await page.waitForSelector('[data-act="approveCycle"]'); await page.click('[data-act="approveCycle"]'); await page.waitForSelector('#modal #mf'); await modalOk(); await page.waitForSelector('text=النتيجة الموحدة المعتمدة'); });
   await step('حساب المتابعة يرى ولا يعدّل (الواجهة والخادم)', async () => { await logout(); await login('sec', 'temp-sec1'); await changePw('Sec#2026'); await page.waitForSelector('.follow'); if (await page.$('[data-act="startEval"]')) throw new Error('زر التقييم ظاهر'); const r = await page.evaluate(async () => { try { await window.EV.save('companies', Object.assign({}, window.EV.state.data.companies[0]), 'x'); return 'saved'; } catch (e) { return String(e.status); } }); if (r !== '403') throw new Error('السكرتير عدّل: ' + r); await page.waitForTimeout(900); });
   await step('خطاب النتيجة وتقرير الأداء بخلفيات الهوية', async () => { await logout(); await login('waqf', 'Waqf#2026'); await page.waitForSelector('.kpis'); await page.click('a[href="#/projects"]'); await page.waitForTimeout(300); await page.click('a[href^="#/contract/"]'); await page.waitForTimeout(300); await page.click('a[href^="#/cycle/"]'); await page.waitForSelector('[data-act="resultLetter"]'); await page.click('[data-act="resultLetter"][data-kind="result"]'); await page.waitForSelector('.sheet.letter'); await page.goBack(); await page.waitForTimeout(500); await page.click('a[href^="#/report/cycle/"]'); await page.waitForSelector('.sheet.report'); await page.selectOption('select[data-change=orientation]', 'landscape'); await page.waitForTimeout(400); const ok = await page.evaluate(() => { const i = document.querySelector('.only-landscape .bg-img'); return i && i.naturalWidth > 0; }); if (!ok) throw new Error('الخلفية العرضية لم تُحمّل'); await page.emulateMedia({ media: 'print' }); await page.pdf({ path: path.join(shots, 'report-landscape.pdf'), preferCSSPageSize: true, printBackground: false }); await page.emulateMedia({ media: 'screen' }); });
@@ -144,6 +155,17 @@ const bigFile = { name: 'ملف كبير.bin', mimeType: 'application/octet-stre
     await login('admin', 'Admin#2026'); await page.waitForTimeout(2500);
     const kept = (await serverData()).evaluations.some(e => Object.values(e.scores || {}).some(x => x && x.n === 'ملاحظة كُتبت بعد انتهاء الجلسة')); if (!kept) throw new Error('ضاع ما كُتب قبل إعادة الدخول');
   });
+  await step('الخروج مع التخلي عن تعديل لم يُحفظ لا يرسله لاحقاً باسم من يدخل بعده', async () => {
+    const evId = await page.evaluate(() => { const EV = window.EV; const cy = EV.state.data.cycles.find(c => c.label === 'دورة الحفظ'); return EV.state.data.evaluations.find(e => e.cycleId === cy.id && e.evaluatorId === EV.state.user.id).id; });
+    await page.goto(URL + '#/eval/' + evId); await page.waitForSelector('.eval-layout');
+    quiet = true; await failPuts(503, ['put']); await page.fill(':nth-match(.item, 1) textarea.note-in', 'تعديل متروك عند الخروج');
+    await page.click('[data-act="logout"]'); await page.waitForSelector('#modal [data-m="ok"]', { timeout: 30000 });
+    const sent = []; page.on('request', r => { if (r.url().includes('/api/rpc') && (r.postData() || '').includes('تعديل متروك عند الخروج')) sent.push(1); });
+    await page.click('#modal [data-m="ok"]'); await page.waitForSelector('#login-user'); await page.unroute('**/api/rpc'); quiet = false;
+    await login('head', 'Head#2026'); await page.waitForSelector('.kpis'); await page.waitForTimeout(7000);
+    if (sent.length) throw new Error('أُرسل التعديل المتروك ' + sent.length + ' مرة بعد الخروج');
+    if ((await serverData()).evaluations.some(e => Object.values(e.scores || {}).some(x => x && x.n === 'تعديل متروك عند الخروج'))) throw new Error('حُفظ التعديل المتروك');
+  });
   await step('رابط الإنترنت لا يسقط إلى إعداد الأوفلاين إذا تعثر الاتصال', async () => {
     const c3 = await newCtx(); const p3 = await c3.newPage(); watch(p3, 'H'); let n = 0; quiet = true;
     await p3.route('**/api/health', r => (n++ === 0 ? r.abort() : r.continue())); await p3.goto(URL); await p3.waitForSelector('#login-user', { timeout: 15000 });
@@ -153,6 +175,17 @@ const bigFile = { name: 'ملف كبير.bin', mimeType: 'application/octet-stre
   await step('أدوات العرض لا تتعطل بقيم غير متوقعة، وتصدير CSV لا يحمل صيغاً', async () => {
     const r = await page.evaluate(() => { const EV = window.EV; return { d: EV.fmtDate({ a: 1 }), n: EV.fmtNum({ a: 1 }), e: EV.esc({ a: 1 }), csv: EV.csvText([['=1+1', '+2', 'نص', 5]]) }; });
     if (r.d !== '—' || r.n !== '—' || r.e !== '') throw new Error('قيم غير متوقعة: ' + JSON.stringify(r)); if (!r.csv.includes(`"'=1+1"`) || !r.csv.includes(`"'+2"`) || !r.csv.includes(',5')) throw new Error('CSV: ' + r.csv);
+  });
+  await step('نافذة فوق نافذة لا تُغلق الأولى، وطلبا الخطاب نفسه معاً يصدران خطاباً واحداً', async () => {
+    await page.goto(URL + '#/home'); await page.waitForSelector('.kpis');
+    await page.evaluate(() => { window.__outer = window.EV.modal({ title: 'النافذة الأولى', body: '<p>الأولى</p>' }); window.__inner = window.EV.confirm('النافذة الثانية؟'); });
+    await page.waitForSelector('#modal2:not([hidden]) .modal-head [data-m="cancel"]'); await page.click('#modal2 .modal-head [data-m="cancel"]');
+    if (await page.evaluate(() => window.__inner) !== false) throw new Error('لم تُلغَ النافذة الثانية');
+    if (await page.evaluate(() => document.getElementById('modal').hidden)) throw new Error('أُغلقت الأولى مع الثانية');
+    await page.click('#modal [data-m="ok"]'); if (await page.evaluate(() => window.__outer) !== true) throw new Error('الأولى لم تعمل بعد إغلاق الثانية');
+    const n0 = (await serverData()).letters.length;
+    const same = await page.evaluate(async id => { const EV = window.EV; const k = EV.byId('contracts', id); const [a, b] = await Promise.all([EV.makeLetter('notice', k), EV.makeLetter('notice', k)]); return a.id === b.id; }, K2);
+    const n1 = (await serverData()).letters.length; if (!same || n1 !== n0 + 1) throw new Error('صدر ' + (n1 - n0) + ' خطاب');
   });
   await step('انتهاء الجلسة يعيد إلى شاشة الدخول', async () => { await page.evaluate(() => sessionStorage.setItem('ev_token', 'tampered.token')); await page.reload(); await page.waitForSelector('#login-user', { timeout: 8000 }); });
   await browser.close(); srv.kill();

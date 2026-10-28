@@ -90,7 +90,15 @@ window.EV = (function () {
     await state.store.put(coll, rec); if (action !== null) await audit(action || 'save', coll, rec.id, { name: recName(rec) }); return rec;
   }
   /* تعديل سجل على نسخة منه: السجل الحي في الذاكرة لا يتغير إلا إذا قُبل الحفظ، فالفشل لا يترك حالة لم تُحفظ على الشاشة */
-  async function update(coll, rec, mutate, action) { const c = clone(rec); mutate(c); await save(coll, c, action); return c; }
+  /* تعديلات السجل الواحد تُنفَّذ بالترتيب، وكل تعديل يُطبَّق على آخر نسخة مقبولة (لا على نسخة لحظة النقر) */
+  const updQueue = new Map();
+  function update(coll, rec, mutate, action) {
+    const key = coll + '/' + rec.id;
+    const run = async () => { const c = clone(byId(coll, rec.id) || rec); mutate(c); await save(coll, c, action); return c; };
+    const p = (updQueue.get(key) || Promise.resolve()).then(run, run); const tail = p.catch(() => { }); updQueue.set(key, tail);
+    tail.then(() => { if (updQueue.get(key) === tail) updQueue.delete(key); });
+    return p;
+  }
   /* عدة سجلات معاً ({ coll, rec, action }): في السحابي كتابة واحدة تُحفظ كلها أو لا شيء؛ في الأوفلاين بالتتابع */
   async function saveMany(items) {
     if (!state.store.putMany) { for (const x of items) await save(x.coll, x.rec, x.action); return items.map(x => x.rec); }
@@ -138,7 +146,8 @@ window.EV = (function () {
     if ((await hashPassword(password, u.salt)) !== u.hash) throw new Error('كلمة المرور غير صحيحة');
     state.user = u; sessionStorage.setItem('ev_user', u.id); u.lastLoginAt = nowISO(); await save('users', u, null); await audit('login', 'users', u.id);
   }
-  async function logout(force) { if (state.user && !(await flushPending()) && force !== true && !(await confirm('توجد تعديلات لم تُحفظ بعد بسبب انقطاع الاتصال؛ الخروج الآن يفقدها. هل تريد الخروج؟', 'نعم، خروج'))) return; if (window.EV.dropHeld) window.EV.dropHeld(); if (isCloud()) { state.store.logout(); applyData(state.store.data); } else audit('logout', 'users', state.user && state.user.id); state.user = null; sessionStorage.removeItem('ev_user'); navigate('#/login'); }
+  const logoutHooks = []; const onLogout = fn => logoutHooks.push(fn);
+  async function logout(force) { if (state.user && !(await flushPending()) && force !== true && !(await confirm('توجد تعديلات لم تُحفظ بعد؛ الخروج الآن يفقدها. هل تريد الخروج؟', 'نعم، خروج'))) return; logoutHooks.forEach(fn => { try { fn(); } catch (e) { console.warn(e); } }); if (isCloud()) { state.store.logout(); applyData(state.store.data); } else audit('logout', 'users', state.user && state.user.id); state.user = null; sessionStorage.removeItem('ev_user'); navigate('#/login'); }
   async function setPassword(user, pw, current) { if (isCloud()) { await state.store.changePassword(pw, current); user.mustChange = false; return; } user.salt = uid(); user.hash = await hashPassword(pw, user.salt); user.mustChange = false; await save('users', user, 'password_change'); }
 
   /* ---------- النماذج والاحتساب ---------- */
@@ -170,11 +179,19 @@ window.EV = (function () {
   function consolidate(cycle, evals, contract, template, settings) {
     settings = settings || state.settings; const included = evals.filter(e => e.status === 'submitted' && !(cycle.excluded || []).includes(e.id));
     const weights = weightsFor(contract, template, cycle); const method = cycle.method || 'mean', ew = cycle.evalWeights || {};
-    const axes = template.axes.map(ax => { const vals = []; let s = 0, w = 0; for (const e of included) { const a = ((e.computed && e.computed.axes) || []).find(x => x.key === ax.key); if (!a || a.score == null) continue; const ww = method === 'weighted' ? (Number(ew[e.evaluatorId]) || 1) : 1; s += a.score * ww; w += ww; vals.push(a.score); } const score = w ? s / w : null; const spread = vals.length ? Math.max(...vals) - Math.min(...vals) : 0; return { key: ax.key, name: ax.name, weight: Number(weights[ax.key] != null ? weights[ax.key] : ax.weight), score, spread, gap: spread > settings.gapThreshold, n: vals.length }; });
+    const axes = template.axes.map(ax => { const vals = []; let s = 0, w = 0; for (const e of included) { const a = ((e.computed && e.computed.axes) || []).find(x => x && x.key === ax.key); if (!a || a.score == null) continue; const ww = method === 'weighted' ? (Number(ew[e.evaluatorId]) || 1) : 1; s += a.score * ww; w += ww; vals.push(a.score); } const score = w ? s / w : null; const spread = vals.length ? Math.max(...vals) - Math.min(...vals) : 0; return { key: ax.key, name: ax.name, weight: Number(weights[ax.key] != null ? weights[ax.key] : ax.weight), score, spread, gap: spread > settings.gapThreshold, n: vals.length }; });
     let acc = 0, wsum = 0; for (const a of axes) if (a.score != null) { acc += a.weight * a.score; wsum += a.weight; }
     const total = wsum ? acc / wsum : null; const critical = included.some(e => e.computed && e.computed.critical);
     let rating = total == null ? 'none' : ratingFor(total, settings.thresholds); if (critical) rating = 'negative';
-    return { axes, total, rating, critical, count: included.length, evaluationIds: included.map(e => e.id), method, at: nowISO() };
+    return { axes, total, rating, critical, count: included.length, evaluationIds: included.map(e => e.id), inputs: Object.fromEntries(included.map(e => [e.id, e.updatedAt || null])), method, evalWeights: method === 'weighted' ? clone(ew) : {}, at: nowISO() };
+  }
+  /* التوحيد قديم إن تغيّر بعده تقييم مقدَّم (أُعيد وقُدّم من جديد، أو استُبعد، أو أُضيف) أو طريقة التوحيد وأوزانها — للمديرين الذين يرون كل التقييمات */
+  const sortKeys = o => Object.keys(o || {}).sort().map(k => [k, o[k]]);
+  function consolidationStale(cy) {
+    const c = cy && cy.consolidated; if (!c) return false; if (!Array.isArray(c.evaluationIds)) return true; const excl = new Set(cy.excluded || []);
+    const cur = list('evaluations', e => e.cycleId === cy.id && e.status === 'submitted' && !excl.has(e.id)); const inp = c.inputs || {};
+    const method = cy.method || 'mean'; if ((c.method || 'mean') !== method || (method === 'weighted' && JSON.stringify(sortKeys(c.evalWeights)) !== JSON.stringify(sortKeys(cy.evalWeights)))) return true;
+    return c.evaluationIds.slice().sort().join(',') !== cur.map(e => e.id).sort().join(',') || cur.some(e => inp[e.id] !== (e.updatedAt || null));
   }
   function companyScores(companyId) {
     const rows = [];
@@ -193,7 +210,9 @@ window.EV = (function () {
   function toast(msg, type) { const t = $('#toast'); const el = document.createElement('div'); el.className = 'toast ' + (type || 'info'); el.textContent = msg; t.appendChild(el); setTimeout(() => el.classList.add('show'), 10); setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 3600); }
   function modal(opts) {
     return new Promise(resolve => {
-      const m = $('#modal'); m.hidden = false; m.innerHTML = `<div class="modal-box ${opts.wide ? 'wide' : ''}" role="dialog" aria-modal="true"><div class="modal-head"><h3>${esc(opts.title || '')}</h3><button class="icon-btn" data-m="cancel" aria-label="إغلاق">✕</button></div><div class="modal-body">${opts.body || ''}</div><div class="modal-foot">${opts.hideOk ? '' : `<button class="btn primary" data-m="ok">${esc(opts.okText || 'موافق')}</button>`}${opts.hideCancel ? '' : `<button class="btn" data-m="cancel">${esc(opts.cancelText || 'إلغاء')}</button>`}</div></div>`;
+      const base = $('#modal'); let m = base;
+      if (!base.hidden) { m = document.getElementById('modal2'); if (!m) { m = document.createElement('div'); m.id = 'modal2'; m.hidden = true; document.body.appendChild(m); } }
+      m.hidden = false; m.innerHTML = `<div class="modal-box ${opts.wide ? 'wide' : ''}" role="dialog" aria-modal="true"><div class="modal-head"><h3>${esc(opts.title || '')}</h3><button class="icon-btn" data-m="cancel" aria-label="إغلاق">✕</button></div><div class="modal-body">${opts.body || ''}</div><div class="modal-foot">${opts.hideOk ? '' : `<button class="btn primary" data-m="ok">${esc(opts.okText || 'موافق')}</button>`}${opts.hideCancel ? '' : `<button class="btn" data-m="cancel">${esc(opts.cancelText || 'إلغاء')}</button>`}</div></div>`;
       const done = v => { m.hidden = true; m.innerHTML = ''; resolve(v); };
       let busy = false;
       m.onclick = async e => { const b = e.target.closest('[data-m]'); if (!b) { if (e.target === m && !busy) done(false); return; } if (busy) return;
@@ -260,7 +279,7 @@ window.EV = (function () {
   }
   /* قبل إعادة التحميل يُحفظ أي تعديل معلّق (الحفظ التلقائي في شاشة التقييم)، فإن بقي ما لم يُحفظ بسبب انقطاع لا تُستبدل البيانات */
   async function flushPending() { const f = window.EV && window.EV.flushPending; if (!f) return true; try { return (await f()) !== false; } catch (e) { return false; } }
-  async function reload() { if (!state.store) return; if (state.user && !(await flushPending())) { toast('لديك تعديلات لم تُحفظ بعد بسبب انقطاع الاتصال. ستُعاد محاولة حفظها تلقائياً، ثم حدّث البيانات.', 'warn'); return; } if (isCloud()) { await state.store.load(); applyData(state.store.data); if (state.user) { const u = byId('users', state.user.id); if (!u || !u.active) return logout(true); state.user = u; } render(); toast('تم تحديث البيانات'); return; } state.data = await state.store.load(); state.settings = Object.assign(clone(B.defaultSettings), state.data.settings); if (state.user) state.user = byId('users', state.user.id) || state.user; render(); toast('تم تحديث البيانات'); }
+  async function reload() { if (!state.store) return; if (state.user && !(await flushPending())) { toast('لديك تعديلات لم تُحفظ بعد (راجع رسالة الخطأ الظاهرة). تُعاد محاولة حفظها تلقائياً؛ حدّث البيانات بعد حفظها.', 'warn'); return; } if (isCloud()) { await state.store.load(); applyData(state.store.data); if (state.user) { const u = byId('users', state.user.id); if (!u || !u.active) return logout(true); state.user = u; } render(); toast('تم تحديث البيانات'); return; } state.data = await state.store.load(); state.settings = Object.assign(clone(B.defaultSettings), state.data.settings); if (state.user) state.user = byId('users', state.user.id) || state.user; render(); toast('تم تحديث البيانات'); }
 
   actions.pickFolder = async () => { try { const h = await S.pickFolder(); await useFolder(h); } catch (e) { if (e.name !== 'AbortError') toast('تعذر فتح المجلد: ' + e.message, 'bad'); } };
   actions.resumeFolder = async () => { const h = state.pendingHandle; if (!h) return; if (await S.ensurePermission(h, true)) await useFolder(h); else toast('لم يُمنح الإذن', 'warn'); };
@@ -276,7 +295,8 @@ window.EV = (function () {
   function resync(err) { if (isCloud() && state.user && err && (err.status === 409 || err.status === 403)) setTimeout(() => reload().catch(() => { }), 600); }
   function bind() {
     /* زر يعمل لا يُنفَّذ مرة ثانية حتى ينتهي (النقر المزدوج على «إصدار الخطاب» كان يصدر خطابين) */
-    document.addEventListener('click', e => { const el = e.target.closest('[data-act]'); if (!el || el.disabled || el.dataset.busy) return; const fn = actions[el.dataset.act]; if (fn) { e.preventDefault(); el.dataset.busy = '1'; let p; try { p = fn(el, e); } catch (err) { p = Promise.reject(err); } Promise.resolve(p).catch(err => { console.error(err); toast('خطأ: ' + err.message, 'bad'); resync(err); }).finally(() => { delete el.dataset.busy; }); } });
+    const running = new Map();   // إجراء جارٍ على الهدف نفسه (حتى لو أُعيد رسم زره) لا يُبدأ مرة ثانية؛ ويسقط القيد بعد 20 ثانية احتياطاً
+    document.addEventListener('click', e => { const el = e.target.closest('[data-act]'); if (!el || el.disabled) return; const fn = actions[el.dataset.act]; if (!fn) return; e.preventDefault(); const key = JSON.stringify(el.dataset); const t0 = running.get(key); if (t0 && Date.now() - t0 < 20000) return; running.set(key, Date.now()); let p; try { p = fn(el, e); } catch (err) { p = Promise.reject(err); } Promise.resolve(p).catch(err => { console.error(err); toast('خطأ: ' + err.message, 'bad'); resync(err); }).finally(() => { running.delete(key); }); });
     document.addEventListener('submit', e => { const f = e.target.closest('form[data-form]'); if (!f) return; e.preventDefault(); const fn = forms[f.dataset.form]; if (fn) Promise.resolve(fn(f, formData(f))).catch(err => { console.error(err); toast('خطأ: ' + err.message, 'bad'); resync(err); }); });
     document.addEventListener('change', e => { const el = e.target.closest('[data-change]'); if (!el) return; if (el.dataset.change === 'orientation') { setOrientation(el.value); return; } const fn = actions['change:' + el.dataset.change]; if (fn) Promise.resolve(fn(el, e)).catch(err => { toast('خطأ: ' + err.message, 'bad'); resync(err); }); });
     document.addEventListener('input', e => { const el = e.target.closest('[data-input]'); if (!el) return; const fn = actions['input:' + el.dataset.input]; if (fn) fn(el, e); });
@@ -304,5 +324,5 @@ window.EV = (function () {
     if (safe) window.open(obj, '_blank', 'noopener'); else { const a = document.createElement('a'); a.href = obj; a.download = name || path.split('/').pop().replace(/^(?:[0-9a-f]{8}__)?(?:notice__)?/, ''); document.body.appendChild(a); a.click(); a.remove(); }
     setTimeout(() => URL.revokeObjectURL(obj), 120000);
   }
-  return { state, routes, actions, forms, route, navigate, render, page, printPage, setOrientation, boot, reload, useLocal, $, esc, safeHtml, uid, clone, nowISO, today, fmtDate, fmtDateTime, fmtNum, fmtMoney, addDays, sha256, hashPassword, can, isManager, isApprover, isAdmin, canEvaluate, canEvaluateContract, canViewAll, safeFileName, byId, list, save, update, saveMany, refreshData, remove, audit, csvCell, csvText, unent, userName, companyName, projectName, login, logout, setPassword, isCloud, openStoredFile, activeTemplate, templateFor, weightsFor, ratingFor, compute, consolidate, companyScores, suggestedConsequence, isSmallContract, toast, modal, confirm, badge, ratingBadge, field, opts, formData, L, B, screens: {} };
+  return { state, routes, actions, forms, route, navigate, render, page, printPage, setOrientation, boot, reload, useLocal, $, esc, safeHtml, uid, clone, nowISO, today, fmtDate, fmtDateTime, fmtNum, fmtMoney, addDays, sha256, hashPassword, can, isManager, isApprover, isAdmin, canEvaluate, canEvaluateContract, canViewAll, safeFileName, byId, list, save, update, saveMany, refreshData, remove, audit, csvCell, csvText, unent, onLogout, consolidationStale, userName, companyName, projectName, login, logout, setPassword, isCloud, openStoredFile, activeTemplate, templateFor, weightsFor, ratingFor, compute, consolidate, companyScores, suggestedConsequence, isSmallContract, toast, modal, confirm, badge, ratingBadge, field, opts, formData, L, B, screens: {} };
 })();
