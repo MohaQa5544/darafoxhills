@@ -35,6 +35,7 @@ const E = {
   conflict: current => new HttpError(409, 'عدّل مستخدم آخر هذا السجل بعد أن فتحته. اضغط «⟳ تحديث» ثم أعد المحاولة.', 'conflict', { current: current == null ? null : current }),
   deleted: () => new HttpError(409, 'حذف مستخدم آخر هذا السجل بعد أن فتحته، فلم يُحفظ تعديلك. اضغط «⟳ تحديث».', 'conflict', { current: null, deleted: true }),
   exists: () => new HttpError(409, 'يوجد ملف بالمسار نفسه. أعد إرفاق الملف.', 'exists'),
+  staleInputs: () => new HttpError(409, 'تغيّرت التقييمات المقدَّمة منذ فتحت الصفحة، فلم تُحفظ النتيجة. حدّث البيانات ثم أعد التوحيد.', 'stale_inputs'),
   busy: () => new HttpError(503, 'الخادم مشغول حالياً، أعد المحاولة بعد لحظات.', 'busy'),
   config: m => new HttpError(503, m || 'الخادم غير مهيأ بعد.', 'not_configured'),
   limited: () => new HttpError(429, 'محاولات دخول خاطئة كثيرة. انتظر ربع ساعة ثم أعد المحاولة.', 'rate_limited'),
@@ -143,6 +144,49 @@ function checkConsolidated(c, ratings) {
   if (c.axes != null && !(Array.isArray(c.axes) && c.axes.every(a => isObj(a) && (a.score == null || isNum(a.score)) && (a.weight == null || isNum(a.weight)) && (a.spread == null || isNum(a.spread)) && (a.n == null || Number.isInteger(a.n)) && (a.name == null || isStr(a.name, 300))))) throw E.bad('محاور النتيجة الموحدة غير صالحة.');
   if (c.evaluationIds != null && !(Array.isArray(c.evaluationIds) && c.evaluationIds.every(x => typeof x === 'string' && ID_RE.test(x)))) throw E.bad('نتيجة موحدة غير صالحة.');
 }
+/* شكل السجلات: الواجهة تفترض أن الأسماء والتواريخ نصوص وأن البنى المعروفة كائنات أو قوائم، وسجل واحد مخالف كان يكفي
+   لإيقاف شاشات كل المستخدمين. ولا يُقبل اسم حقل من خصائص Object.prototype في أي عمق (toString و__proto__ وأمثالهما). */
+const PROTO_KEYS = new Set(Object.getOwnPropertyNames(Object.prototype));
+const TEXT_FIELDS = new Set(['id', 'name', 'name_ar', 'name_en', 'label', 'subject', 'to', 'contract_no', 'code', 'location', 'description', 'contact_name', 'contact_phone', 'contact_email', 'email', 'cr_number', 'mof_grade', 'notes', 'note', 'reviewNote', 'approvalNote', 'returnedNote', 'reopenReason', 'strengths', 'weaknesses', 'recommendation', 'refNo', 'type', 'role', 'status', 'model', 'username', 'bodyHtml', 'path', 'mime', 'itemKey', 'axisKey', 'consequence', 'method', 'templateId', 'companyId', 'projectId', 'contractId', 'cycleId', 'evaluationId', 'evaluatorId', 'leadEngineer', 'uploadedBy', 'issuedBy', 'createdBy', 'approvedBy', 'reviewedBy', 'returnedBy', 'noticeFile', 'noticeLetterId', 'noticeStatus', 'status_reason']);
+const isDateField = k => /(At|Date|_date|_until)$/.test(k);
+const NUM_FIELDS = new Set(['value', 'durationMonths', 'version', 'size']);
+const LIST_FIELDS = new Set(['roles', 'evaluators', 'excluded', 'axes']);
+const OBJ_FIELDS = new Set(['scores', 'computed', 'consolidated', 'objection', 'weights', 'evalWeights']);
+const REQUIRED = { companies: ['name_ar'], projects: ['name'], templates: ['name', 'role'], attachments: ['name', 'path'] };
+const KEY_RE = /^[a-z][a-z0-9_]{0,40}$/;
+function deepCheck(v, depth) {
+  if (depth > 12) throw E.bad('بنية السجل معقدة أكثر من اللازم.');
+  if (Array.isArray(v)) { if (v.length > 5000) throw E.bad('قائمة أطول من المسموح.'); for (const x of v) deepCheck(x, depth + 1); return; }
+  if (isObj(v)) { for (const k of Object.keys(v)) { if (PROTO_KEYS.has(k)) throw E.bad('اسم حقل غير مسموح: ' + k.slice(0, 40)); deepCheck(v[k], depth + 1); } }
+}
+export function checkRecord(coll, rec) {
+  deepCheck(rec, 0);
+  for (const k of Object.keys(rec)) {
+    const v = rec[k]; if (v === null) continue;
+    const bad = () => { throw E.bad('قيمة غير صالحة في الحقل ' + k + '.'); };
+    if (TEXT_FIELDS.has(k) || isDateField(k)) { if (typeof v !== 'string' || v.length > (k === 'bodyHtml' ? 100000 : 20000)) bad(); }
+    else if (NUM_FIELDS.has(k)) { if (!(isNum(v) || (typeof v === 'string' && v.length < 40 && (v.trim() === '' || Number.isFinite(Number(v)))))) bad(); }
+    else if (LIST_FIELDS.has(k)) { if (!Array.isArray(v)) bad(); }
+    else if (OBJ_FIELDS.has(k)) { if (!isObj(v)) bad(); }
+  }
+  for (const k of REQUIRED[coll] || []) if (typeof rec[k] !== 'string' || !rec[k].trim()) throw E.bad('حقل مطلوب ناقص: ' + k + '.');
+  if (coll === 'templates') checkTemplate(rec);
+  if (coll === 'evaluations') checkEvaluation(rec);
+}
+/* مفاتيح المحاور والأسئلة تُستخدم أسماءَ حقول في الدرجات، فتُقصر على نمط آمن (مفاتيح البنك والمحرر كلها عليه) */
+function checkTemplate(t) {
+  if (!Array.isArray(t.axes) || !t.axes.length || t.axes.length > 40) throw E.bad('محاور النموذج غير صالحة.');
+  const axes = new Set(), items = new Set();
+  for (const a of t.axes) {
+    if (!isObj(a) || typeof a.key !== 'string' || !KEY_RE.test(a.key) || axes.has(a.key) || !isStr(a.name, 300) || !Number.isFinite(Number(a.weight)) || !Array.isArray(a.items) || a.items.length > 300) throw E.bad('محور غير صالح في النموذج.');
+    axes.add(a.key);
+    for (const i of a.items) if (!isObj(i) || typeof i.key !== 'string' || !KEY_RE.test(i.key) || items.has(i.key) || !isStr(i.text, 3000) || (i.importance != null && !Number.isFinite(Number(i.importance))) || (i.hint != null && !isStr(i.hint, 3000))) throw E.bad('سؤال غير صالح في النموذج.'); else items.add(i.key);
+  }
+}
+function checkEvaluation(e) {
+  if (e.scores != null) for (const [k, s] of Object.entries(e.scores)) if (!KEY_RE.test(k) || !isObj(s) || (s.s != null && !isNum(s.s)) || (s.na != null && typeof s.na !== 'boolean') || (s.n != null && !isStr(s.n, 10000))) throw E.bad('درجة غير صالحة في التقييم.');
+  const c = e.computed; if (c != null && ((c.total != null && !isNum(c.total)) || (c.axes != null && !Array.isArray(c.axes)))) throw E.bad('نتيجة غير صالحة في التقييم.');
+}
 
 /* ---------- الخادم ---------- */
 export class Server {
@@ -153,17 +197,19 @@ export class Server {
     this.limUser = new Limiter(8, 15 * 60e3); this.limIp = new Limiter(40, 15 * 60e3); this.limWrite = new Limiter(LIMITS.writesPer5Min, 5 * 60e3); this.limUpload = new Limiter(LIMITS.uploadsPer10Min, 10 * 60e3);
     this.userGate = new Map(); this.unknownGate = 0; this.lastPrune = '';
     this.seedError = seedProblem(this.seedUsers); if (this.seedError) this.log('SEED_USERS: ' + this.seedError);
-    this.ops = { login: this.opLogin, load: this.opLoad, put: this.opPut, remove: this.opRemove, settings: this.opSettings, audit: this.opAudit, password: this.opPassword, userCreate: this.opUserCreate, userReset: this.opUserReset, export: this.opExport, import: this.opImport };
+    this.ops = { login: this.opLogin, load: this.opLoad, put: this.opPut, batch: this.opBatch, remove: this.opRemove, settings: this.opSettings, audit: this.opAudit, password: this.opPassword, userCreate: this.opUserCreate, userReset: this.opUserReset, export: this.opExport, import: this.opImport };
   }
   configured() { return !!(this.secret && this.secret.length >= 32 && this.store && this.store.ready !== false); }
   get labels() { return (this.bank && this.bank.labels) || {}; }
 
   /* ---------- المستند وذاكرته المؤقتة ---------- */
-  /* ذاكرة النسخة لا تعود إلى الوراء: قراءة بدأت قبل كتابتنا الأحدث لا تحل محلها (ما دامت القاعدة نفسها لم يُعَد إنشاؤها) */
-  setCache(doc, etag) {
+  /* «at» في الذاكرة = وقت إرسال القراءة التي جاءت بالنسخة (أو وقت كتابتنا لها)، فلا تُعدّ قراءةٌ أُرسلت قبل بدء طلب ما «حديثةً» له.
+     قراءة أُرسلت قبل أن تُخزَّن نسختنا الحالية قد تكون أقدم منها فتُترك؛ وقراءة أُرسلت بعدها هي الحقيقة حتى لو كان رقمها أصغر
+     (نسخة احتياطية أُعيدت فوق القاعدة مثلاً). */
+  setCache(doc, etag, sent) {
     const c = this.cache;
-    if (c && c.doc && doc && c.doc.createdAt === doc.createdAt && (c.doc.rev || 0) > (doc.rev || 0)) { c.at = Date.now(); return c; }
-    this.cache = { doc, etag, at: Date.now() }; return this.cache;
+    if (c && c.doc && doc && c.at >= sent && c.doc.createdAt === doc.createdAt && (c.doc.rev || 0) > (doc.rev || 0)) return c;
+    this.cache = { doc, etag, at: sent }; return this.cache;
   }
   /* maxAge: أقصى عمر مقبول للذاكرة (الافتراضي cacheMs). القراءة المشروطة تعيد 304 رخيصة إن لم يتغير شيء. */
   async readDoc(fresh, maxAge) {
@@ -171,10 +217,11 @@ export class Server {
     if (c && !fresh && Date.now() - c.at < age) return c;
     if (!fresh && this.reading) return this.reading;                       // قراءة جارية تُشارك بين الطلبات المتزامنة
     const p = (async () => {
+      const sent = Date.now();
       const r = await this.store.read(this.P.db, c && c.etag ? { ifNoneMatch: c.etag } : {});
-      if (r.status === 304) { const k = this.cache || c; k.at = Date.now(); this.cache = k; return k; }
-      if (r.status === 404) { this.cache = null; return { doc: null, etag: null, at: Date.now() }; }
-      return this.setCache(JSON.parse(gunzipSync(r.body).toString('utf8')), r.etag || null);
+      if (r.status === 304) { if (this.cache && this.cache !== c) return this.cache; c.at = Math.max(c.at, sent); this.cache = c; return c; }
+      if (r.status === 404) { if (this.cache && this.cache.at >= sent) return this.cache; this.cache = null; return { doc: null, etag: null, at: sent }; }
+      return this.setCache(JSON.parse(gunzipSync(r.body).toString('utf8')), r.etag || null, sent);
     })();
     if (!fresh) { this.reading = p; p.finally(() => { if (this.reading === p) this.reading = null; }).catch(() => { }); }
     return p;
@@ -202,10 +249,19 @@ export class Server {
     finally { this.flushing = false; if (this.jobs.length) this.flush(); }
   }
   async commit(batch) {
-    let forceFresh = false; const wid = randomBytes(6).toString('hex');
+    let forceFresh = false, createErr = null; const wid = randomBytes(6).toString('hex');
+    const tried = [];   // محاولات فشل ردها وقد تكون كُتبت: { wid, settle, archives, sure } — sure: رُفضت يقيناً (تعارض الشرط)
     for (let attempt = 0; attempt < 8; attempt++) {
       if (!batch.length) return;
       const t0 = Date.now(); const cur = await this.readDoc(forceFresh || attempt > 0); const fresh = cur.at >= t0; const create = !cur.doc;
+      /* كل نسخة تحمل معرّفات آخر الكتابات التي بُنيت عليها، فإن وُجد فيها معرّف محاولة سابقة لنا فقد كُتبت وتُعتمد نتيجتها */
+      if (tried.length && fresh) {
+        const ids = (cur.doc && cur.doc.wids) || [];
+        const landed = tried.find(t => ids.includes(t.wid));
+        if (landed) { landed.settle(); return; }
+        for (let i = tried.length - 1; i >= 0; i--) if (tried[i].sure) { for (const a of tried[i].archives) await this.store.del(a.path).catch(() => { }); tried.splice(i, 1); }
+        if (create && createErr) throw createErr;
+      }
       if (!create && !cur.etag) { forceFresh = true; continue; }            // لا كتابة غير مشروطة أبداً
       /* كل طلب يُطبَّق على النسخة نفسها بالترتيب. الطلب المرفوض قد يكون عدّل النسخة قبل رفضه،
          لذلك يُستبعد ويُعاد تطبيق الباقين على نسخة نظيفة. والرفض المبني على ذاكرة قديمة يُعاد على أحدث نسخة. */
@@ -226,10 +282,10 @@ export class Server {
         if (!batch.length) return;
       }
       if (stale) { forceFresh = true; continue; }
-      const base = cur.doc ? (cur.doc.rev || 0) : 0; const nChanged = outs.filter(v => v !== NOOP).length;
-      const settle = rev => batch.forEach((j, i) => j.resolve({ value: outs[i] === NOOP ? undefined : outs[i], rev, prevRev: base, others: Math.max(0, nChanged - (outs[i] === NOOP ? 0 : 1)) }));
-      if (!create && !nChanged) { settle(base); return; }                    // لا تغيير: لا كتابة
-      const now = new Date().toISOString(); doc.rev = base + 1; doc.updatedAt = now; doc.wid = wid + '.' + attempt;
+      const base = cur.doc ? (cur.doc.rev || 0) : 0; const nChanged = outs.filter(v => v !== NOOP).length; const jobs = batch.slice(), res = outs.slice();
+      const settle = rev => jobs.forEach((j, i) => j.resolve({ value: res[i] === NOOP ? undefined : res[i], rev, prevRev: base, others: Math.max(0, nChanged - (res[i] === NOOP ? 0 : 1)) }));
+      if (!create && !nChanged) { if (!fresh) { forceFresh = true; continue; } settle(base); return; }   // «لا تغيير» لا يُقبل إلا على أحدث نسخة
+      const now = new Date().toISOString(); doc.rev = base + 1; doc.updatedAt = now; doc.wid = wid + '.' + attempt; doc.wids = (doc.wids || []).slice(-31).concat([doc.wid]);
       const archives = [];
       while (doc.audit.length > LIMITS.auditKeep) { const chunk = doc.audit.splice(0, LIMITS.auditChunk); const ap = this.P.audit + now.replace(/[^0-9]/g, '').slice(0, 14) + '-' + randomBytes(3).toString('hex') + '.json.gz'; archives.push({ path: ap, body: gzipSync(Buffer.from(JSON.stringify(chunk))) }); (doc.auditArchives = doc.auditArchives || []).push(ap); }
       const today = now.slice(0, 10);
@@ -237,14 +293,16 @@ export class Server {
       try {
         for (const a of archives) await this.store.write(a.path, a.body, { contentType: 'application/gzip' });
         const etag = await this.store.write(this.P.db, gzipSync(Buffer.from(JSON.stringify(doc))), create ? { create: true, contentType: 'application/gzip' } : { ifMatch: cur.etag, contentType: 'application/gzip' });
-        if (etag) this.setCache(doc, etag); else this.cache = null;
+        this.cache = etag ? { doc, etag, at: Date.now() } : null;
         settle(doc.rev); return;
       } catch (e) {
-        if (!((e && e.code === 'precondition') || create)) throw e;          // نتيجة غير معروفة (انقطاع مثلاً): لا يُحذف الأرشيف فقد تكون الكتابة تمت
-        const again = await this.readDoc(true).catch(() => null);
-        if (again && again.doc && again.doc.wid === doc.wid) { settle(doc.rev); return; }   // التزامنا نحن (أعادت المكتبة المحاولة بعد نجاح لم يصل رده)
-        for (const a of archives) await this.store.del(a.path).catch(() => { });
-        if (create && !(again && again.doc)) throw e;
+        const code = e && e.code;
+        if (['suspended', 'rate_limited', 'store_denied', 'store_missing'].includes(code)) { for (const a of archives) await this.store.del(a.path).catch(() => { }); throw e; }   // رُفضت الكتابة نفسها
+        /* تعارض الشرط: كتب غيرنا قبلنا، إلا إن كانت المكتبة أعادت طلبنا بعد نجاح لم يصل رده. غير ذلك (انقطاع): النتيجة مجهولة،
+           فلا يُحذف أرشيفها. في الحالتين تُقرأ أحدث نسخة في المحاولة التالية ويُبحث فيها عن معرّف هذه المحاولة. */
+        tried.push({ wid: doc.wid, settle: () => settle(doc.rev), archives, sure: code === 'precondition' || code === 'exists' });
+        if (create) createErr = e;
+        forceFresh = true;
         await sleep(30 + Math.floor(Math.random() * 90) * (attempt + 1));
       }
     }
@@ -337,7 +395,16 @@ export class Server {
         if (rec.evalWeights != null && !(isObj(rec.evalWeights) && Object.entries(rec.evalWeights).every(([u, w]) => ID_RE.test(u) && isNum(w) && w >= 0 && w <= 100))) throw E.bad('أوزان المقيّمين غير صالحة.');
         if (rec.excluded != null && !(Array.isArray(rec.excluded) && rec.excluded.every(x => typeof x === 'string' && ID_RE.test(x)))) throw E.bad('قائمة الاستبعاد غير صالحة.');
         if (rec.label != null && !isStr(rec.label, 200)) throw E.bad('تسمية الدورة طويلة جداً.');
+        if (!Object.keys(this.labels.cycleStatus || { open: 1, consolidated: 1, approved: 1, closed: 1 }).includes(rec.status)) throw E.bad('حالة دورة غير معروفة.');
         checkConsolidated(rec.consolidated, Object.keys(this.labels.rating || {}).concat(['none', 'negative']));
+        if (rec.objection != null && !isObj(rec.objection)) throw E.bad('بيانات التظلم غير صالحة.');
+        /* النتيجة الموحدة تُحسب من التقييمات المقدَّمة الحالية غير المستبعدة كلها؛ نسخة قديمة من الصفحة تُرفض */
+        if (rec.consolidated && !same(prev ? prev.consolidated : null, rec.consolidated)) {
+          const excl = new Set(rec.excluded || []);
+          const want = doc.data.evaluations.filter(e => e.cycleId === rec.id && e.status === 'submitted' && !excl.has(e.id)).map(e => e.id).sort();
+          const got = Array.isArray(rec.consolidated.evaluationIds) ? rec.consolidated.evaluationIds.slice().sort() : null;
+          if (!got || !same(want, got) || (rec.consolidated.count != null && rec.consolidated.count !== want.length)) throw E.staleInputs();
+        }
         if (!prev) {
           if (r < 2) {
             if (k.leadEngineer !== me.id) throw E.forbid('فتح دورات التقييم لرئيس القسم أو المهندس المسؤول عن العقد.');
@@ -354,6 +421,12 @@ export class Server {
         if (approving && r < 3) throw E.forbid('اعتماد النتيجة لمدير الإدارة أو مساعده أو رئيس قسم تنمية الوقف.');
         const locked = s => s === 'approved' || s === 'closed';
         if (locked(prev.status) && !locked(rec.status) && me.role !== 'admin') throw E.forbid('إعادة فتح دورة معتمدة لمدير النظام فقط.');
+        /* الدورة المعتمدة مقفلة: لا يتغير فيها لغير مدير النظام إلا التظلم (يسجله رئيس القسم ويقرر فيه المعتمد) */
+        if (locked(prev.status) && me.role !== 'admin') {
+          for (const f of new Set([...Object.keys(prev), ...Object.keys(rec)])) if (f !== 'objection' && f !== 'updatedAt' && !same(prev[f], rec[f]) && !((f === 'createdAt' || f === 'createdBy') && prev[f] == null)) throw E.forbid('الدورة معتمدة ومقفلة؛ لا يُعدَّل فيها إلا التظلم، وإعادة فتحها لمدير النظام.');
+        }
+        const po = prev.objection || {}, ro = rec.objection || {};
+        if (['outcome', 'decision', 'decidedBy', 'decidedAt'].some(x => !same(po[x], ro[x])) && r < 3) throw E.forbid('القرار في التظلم لمدير الإدارة أو مساعده أو رئيس قسم تنمية الوقف.');
         return;
       }
       case 'evaluations': {
@@ -375,17 +448,25 @@ export class Server {
         }
         if (r < 2) throw E.forbid('لا يمكنك تعديل تقييم زميل.');
         if (!prev) throw E.forbid('لا يمكن إنشاء تقييم باسم مقيّم آخر.');
+        { const cy = cycle(prev.cycleId); if (cy && (cy.status === 'approved' || cy.status === 'closed') && me.role !== 'admin') throw E.forbid('الدورة معتمدة ومقفلة، ولا تُعاد تقييماتها.'); }
         const allowed = new Set(['status', 'returnedNote', 'returnedBy', 'returnedAt', 'updatedAt']);
         for (const k2 of new Set([...Object.keys(prev), ...Object.keys(rec)])) if (!allowed.has(k2) && !same(prev[k2], rec[k2])) throw E.forbid('لا يجوز للمراجع تعديل تقييم زميل؛ أعِده إلى صاحبه مع الملاحظة.');
         if (rec.status !== 'returned' || prev.status !== 'submitted') throw E.bad('يُعاد التقييم المقدَّم فقط.');
         return;
       }
       case 'attachments': {
-        if (prev) { if (r < 2) throw E.forbid(); return; }
+        if (prev) {
+          if (r < 2) throw E.forbid();
+          if (rec.path !== prev.path || rec.contractId !== prev.contractId || rec.uploadedBy !== prev.uploadedBy) throw E.bad('لا يُغيَّر ملف المرفق أو عقده أو رافعه.');
+          return;
+        }
         if (rec.uploadedBy !== me.id) throw E.bad();
-        if (!isStr(rec.path, 400) || !FILE_RE.test(rec.path) || rec.path.split('/')[1] !== rec.contractId) throw E.bad('مسار مرفق غير صالح.');
-        if (doc.data.attachments.some(a => a.path === rec.path)) throw E.bad('المرفق مسجل من قبل.');
-        if (rec.evaluationId) { const e = doc.data.evaluations.find(x => x.id === rec.evaluationId); if (!e) throw E.bad('التقييم غير موجود.'); if (e.evaluatorId !== me.id && r < 2) throw E.forbid(); }
+        if (!isStr(rec.path, 400) || !FILE_RE.test(rec.path) || rec.path.includes('..') || rec.path.split('/')[1] !== rec.contractId) throw E.bad('مسار مرفق غير صالح.');
+        if (!contract(rec.contractId)) throw E.bad('العقد غير موجود.');
+        /* سجل مرفق لا يُنشأ لملف موجود (ولا لإخطار عقد موقّع)، وإلا صار وسيلة لحذف ملفات الآخرين */
+        if (doc.data.attachments.some(a => a.path === rec.path) || doc.data.contracts.some(c => c.noticeFile === rec.path)) throw E.bad('المرفق مسجل من قبل.');
+        if (r < 2 && !this.onTeam(doc, me, rec.contractId)) throw E.forbid('لست ضمن فريق تقييم هذا العقد.');
+        if (rec.evaluationId) { const e = doc.data.evaluations.find(x => x.id === rec.evaluationId); if (!e) throw E.bad('التقييم غير موجود.'); if (e.contractId !== rec.contractId) throw E.bad('التقييم لا يتبع هذا العقد.'); if (e.evaluatorId !== me.id && r < 2) throw E.forbid(); }
         else if (r < 2) throw E.forbid();
         return;
       }
@@ -406,8 +487,9 @@ export class Server {
   allocRef(doc, rec) {
     const y = /^\d{4}/.test(String(rec.issuedAt || '')) ? String(rec.issuedAt).slice(0, 4) : String(new Date().getFullYear());
     doc.counters = doc.counters || {}; const key = 'letters:' + y;
-    if (!Number.isInteger(doc.counters[key])) { let max = 0; for (const l of doc.data.letters) if (String(l.issuedAt || '').startsWith(y)) { const m = /(\d+)\s*$/.exec(String(l.refNo || '')); if (m) max = Math.max(max, Number(m[1])); } doc.counters[key] = max; }
-    doc.counters[key]++;
+    let max = Number.isInteger(doc.counters[key]) ? doc.counters[key] : 0;               // العداد، ولا يقل عن أكبر رقم مسجل فعلاً (خطابات مستوردة مثلاً)
+    for (const l of doc.data.letters) if (String(l.issuedAt || '').startsWith(y)) { const m = /(\d+)\s*$/.exec(String(l.refNo || '')); if (m) max = Math.max(max, Number(m[1])); }
+    doc.counters[key] = max + 1;
     return `${(doc.settings && doc.settings.letterRefPrefix) || ''}${y}/${String(doc.counters[key]).padStart(3, '0')}`;
   }
 
@@ -466,12 +548,18 @@ export class Server {
     this.limUser.ok(username);
     const at = new Date().toISOString(); const last = (cur.doc.logins || {})[user.id]; const upgrade = sec.algo === 'sha256' ? await hashPassword(pw) : null;
     if (upgrade || !last || Date.now() - Date.parse(last) > LIMITS.loginRecordMs) {
-      await this.mutate(d => { const u = d.data.users.find(x => x.id === user.id); if (!u) return NOOP; const s = d.secrets[u.id]; if (upgrade && s && s.algo === 'sha256' && s.hash === sec.hash) Object.assign(s, upgrade); (d.logins = d.logins || {})[u.id] = at; d.audit.push(this.entry(u, 'login', 'users', u.id)); });
+      await this.mutate(d => {
+        const u = d.data.users.find(x => x.id === user.id); const s = d.secrets[user.id];
+        if (!u || !s || (s.pwv || 0) !== (sec.pwv || 0) || s.hash !== sec.hash) return NOOP;  // تغيّرت كلمة المرور في هذه الأثناء: لا تسجيل
+        if (upgrade && s.algo === 'sha256') Object.assign(s, upgrade);
+        (d.logins = d.logins || {})[u.id] = at; d.audit.push(this.entry(u, 'login', 'users', u.id));
+      });
       cur = await this.readDoc(false);
     }
+    /* الرمز يُوقَّع من كلمة المرور التي تحققنا منها نفسها؛ إن أُعيدت أو غُيّرت أو عُطّل الحساب أثناء الدخول يُرفض الدخول */
     const doc = cur.doc; const s2 = doc.secrets[user.id]; const me = doc.data.users.find(x => x.id === user.id);
-    if (!me || !s2) throw E.auth();
-    return { token: signToken(this.secret, user.id, s2.pwv || 0), me: user.id, mustChange: !!s2.mustChange, data: this.project(doc, me), rev: doc.rev };
+    if (!me || !s2 || !me.active || (s2.pwv || 0) !== (sec.pwv || 0)) throw new HttpError(403, 'اسم المستخدم أو كلمة المرور غير صحيحة.', 'bad_credentials');
+    return { token: signToken(this.secret, user.id, sec.pwv || 0), me: user.id, mustChange: !!sec.mustChange, data: this.project(doc, me), rev: doc.rev };
   }
   loginRefresh(username, known) {
     const now = Date.now();
@@ -479,27 +567,45 @@ export class Server {
     if (now - this.unknownGate < 60e3) return false; this.unknownGate = now; return true;
   }
   async opLoad(b, req) { const { user, doc } = await this.freshAuthed(req); return { me: user.id, data: this.project(doc, user), rev: doc.rev }; }
+  /* التحقق من طلب حفظ قبل إدخاله الطابور */
+  putItem(x) {
+    if (!isObj(x) || !COLLS.includes(x.coll)) throw E.bad('مجموعة غير معروفة.');
+    if (!isObj(x.rec) || typeof x.rec.id !== 'string' || !ID_RE.test(x.rec.id)) throw E.bad('سجل غير صالح.');
+    if (Buffer.byteLength(JSON.stringify(x.rec)) > LIMITS.record) throw E.large('السجل أكبر من الحد المسموح.');
+    const rec = sanitize(x.coll, x.rec); checkRecord(x.coll, rec);
+    return { coll: x.coll, rec, base: typeof x.base === 'string' ? x.base : null, audit: x.audit };
+  }
+  /* تطبيق حفظ واحد على النسخة داخل الكتابة الذرية؛ يعيد ما يحدده الخادم في السجل (رقم الخطاب) */
+  applyPut(doc, me, x) {
+    const arr = doc.data[x.coll]; const i = arr.findIndex(r => r.id === x.rec.id); const prev = i >= 0 ? arr[i] : null;
+    this.authorizePut(doc, me, x.coll, x.rec, prev);
+    if (prev && (prev.updatedAt || null) !== x.base) throw E.conflict(prev.updatedAt || null);
+    if (!prev && x.base) throw E.deleted();
+    const out = Object.assign({}, x.rec);
+    if (x.coll === 'users') Object.assign(out, { username: prev.username, createdAt: prev.createdAt });
+    if (x.coll === 'letters') out.refNo = prev ? prev.refNo : this.allocRef(doc, out);
+    if (i >= 0) arr[i] = out; else arr.push(out);
+    const a = this.clientEntry(me, x.audit, x.coll, x.rec.id); if (a) doc.audit.push(a);
+    return x.coll === 'letters' ? { refNo: out.refNo } : null;
+  }
   async opPut(b, req) {
     const { token, user } = await this.authed(req);
     if (rankOf(user) < 1) throw E.forbid('حساب المتابعة للاطلاع فقط ولا يملك صلاحية التعديل.');
-    if (!COLLS.includes(b.coll)) throw E.bad('مجموعة غير معروفة.');
-    if (!isObj(b.rec) || typeof b.rec.id !== 'string' || !ID_RE.test(b.rec.id)) throw E.bad('سجل غير صالح.');
-    if (Buffer.byteLength(JSON.stringify(b.rec)) > LIMITS.record) throw E.large('السجل أكبر من الحد المسموح.');
+    const x = this.putItem(b);
     this.writeGate(user);
-    const rec = sanitize(b.coll, b.rec); const base = typeof b.base === 'string' ? b.base : null;
-    const r = await this.mutate(doc => {
-      const me = this.check(doc, token); const arr = doc.data[b.coll]; const i = arr.findIndex(x => x.id === rec.id); const prev = i >= 0 ? arr[i] : null;
-      this.authorizePut(doc, me, b.coll, rec, prev);
-      if (prev && (prev.updatedAt || null) !== base) throw E.conflict(prev.updatedAt || null);
-      if (!prev && base) throw E.deleted();
-      const out = Object.assign({}, rec);
-      if (b.coll === 'users') Object.assign(out, { username: prev.username, createdAt: prev.createdAt });
-      if (b.coll === 'letters') out.refNo = prev ? prev.refNo : this.allocRef(doc, out);
-      if (i >= 0) arr[i] = out; else arr.push(out);
-      const a = this.clientEntry(me, b.audit, b.coll, rec.id); if (a) doc.audit.push(a);
-      return b.coll === 'letters' ? { refNo: out.refNo } : null;
-    });
+    const r = await this.mutate(doc => this.applyPut(doc, this.check(doc, token), x));
     return { ok: true, rev: r.rev, prevRev: r.prevRev, others: r.others, patch: r.value || null };
+  }
+  /* عدة سجلات في كتابة واحدة: تُحفظ كلها أو لا يُحفظ شيء (الاعتماد مع حالة الشركة، إصدار الخطاب مع العقد…) */
+  async opBatch(b, req) {
+    const { token, user } = await this.authed(req);
+    if (rankOf(user) < 1) throw E.forbid('حساب المتابعة للاطلاع فقط ولا يملك صلاحية التعديل.');
+    if (!Array.isArray(b.items) || !b.items.length || b.items.length > 10) throw E.bad('طلب غير صالح.');
+    const items = b.items.map(x => this.putItem(x));
+    if (new Set(items.map(x => x.coll + '/' + x.rec.id)).size !== items.length) throw E.bad('سجل مكرر في الطلب نفسه.');
+    this.writeGate(user);
+    const r = await this.mutate(doc => { const me = this.check(doc, token); return items.map(x => this.applyPut(doc, me, x)); });
+    return { ok: true, rev: r.rev, prevRev: r.prevRev, others: r.others, patches: r.value || [] };
   }
   async opRemove(b, req) {
     const { token, user } = await this.authed(req);
@@ -512,7 +618,7 @@ export class Server {
       this.authorizeRemove(doc, me, b.coll, prev);
       doc.data[b.coll] = doc.data[b.coll].filter(x => x.id !== b.id);
       const a = this.clientEntry(me, b.audit, b.coll, b.id); if (a) doc.audit.push(a);
-      removed = prev;
+      removed = doc.data.contracts.some(c => c.noticeFile === prev.path) ? null : prev;     // ملف إخطار عقد لا يُحذف مع سجل مرفق
     });
     if (b.coll === 'attachments' && removed && typeof removed.path === 'string' && FILE_RE.test(removed.path)) await this.store.del(this.P.files + sha256hex(removed.path)).catch(e => this.log('file delete failed', e && e.message));   // حذف السجل يحذف ملفه أيضاً
     return { ok: true, rev: r.rev, prevRev: r.prevRev, others: r.others };
@@ -521,13 +627,15 @@ export class Server {
     const { token, user } = await this.authed(req);
     if (user.role !== 'admin') throw E.forbid('الإعدادات لمدير النظام فقط.');
     if (!isObj(b.settings) || Buffer.byteLength(JSON.stringify(b.settings)) > LIMITS.settings) throw E.bad('إعدادات غير صالحة.');
+    deepCheck(b.settings, 0);
     this.writeGate(user);
     const r = await this.mutate(doc => { const me = this.check(doc, token); if (me.role !== 'admin') throw E.forbid('الإعدادات لمدير النظام فقط.'); doc.settings = jsonClone(b.settings); doc.audit.push(this.entry(me, 'settings_update', 'settings', null)); });
     return { ok: true, rev: r.rev, prevRev: r.prevRev, others: r.others };
   }
   async opAudit(b, req) {
-    const { user, token } = await this.authed(req); const a = this.clientEntry(user, b.entry);
-    if (!a || SERVER_AUDITED.has(a.action) || !CLIENT_AUDIT.has(a.action)) return { ok: true };
+    const { user, token } = await this.authed(req); const action = isObj(b.entry) ? String(b.entry.action || '') : '';
+    if (!CLIENT_AUDIT.has(action)) return { ok: true };
+    const a = this.entry(user, action, 'users', user.id);                                    // نص السجل من الخادم وحده، لا من المتصفح
     this.writeGate(user);
     await this.mutate(d => { this.check(d, token); d.audit.push(a); });
     return { ok: true };
@@ -593,12 +701,15 @@ export class Server {
     const P = b.payload; if (!isObj(P)) throw E.bad('ملف النسخة غير صالح.');
     const fromCloud = P.format === 'sijil-alada-cloud' && P.scope === 'full';
     if (P.format === 'sijil-alada-cloud' && P.scope !== 'full') throw E.bad('هذه نسخة مستخدم وليست نسخة كاملة؛ صدّر النسخة من حساب مدير النظام.');
-    const incoming = Array.isArray(P.users) ? P.users.filter(u => isObj(u) && typeof u.id === 'string' && ID_RE.test(u.id) && USER_RE.test(String(u.username || '').trim())) : [];
+    const problems = []; const valid = (coll, r0) => { try { if (!isObj(r0) || typeof r0.id !== 'string' || !ID_RE.test(r0.id) || Buffer.byteLength(JSON.stringify(r0)) > LIMITS.record) throw E.bad('سجل غير صالح.'); checkRecord(coll, coll === 'users' ? sanitize('users', r0) : r0); return true; } catch (e) { if (problems.length < 20) problems.push(coll + ' ' + String(isObj(r0) ? r0.id : '?').slice(0, 40) + ': ' + (e instanceof HttpError ? e.message : 'غير صالح')); return false; } };
+    const incoming = Array.isArray(P.users) ? P.users.filter(u => isObj(u) && USER_RE.test(String(u.username || '').trim()) && valid('users', u)) : [];
     const names = new Map(); for (const u of incoming) { const k = lc(String(u.username).trim()); if (names.has(k)) throw E.bad('اسم مستخدم مكرر في النسخة: ' + u.username); names.set(k, u); }
     const temps = new Map(); for (const u of incoming) temps.set(u.id, tempPassword());
     const tempHashes = new Map(); for (const [id, pw] of temps) tempHashes.set(id, await hashPassword(pw));
     const archivedIds = new Set((await this.readArchives(doc0)).map(a => a.id));
-    const report = { counts: {}, tempPasswords: [], skipped: 0, files: 0 }; let meNewId = null;
+    let settingsOk = isObj(P.settings) && Buffer.byteLength(JSON.stringify(P.settings)) <= LIMITS.settings;
+    if (settingsOk) try { deepCheck(P.settings, 0); } catch (e) { settingsOk = false; problems.push('settings: ' + e.message); }
+    const report = { counts: {}, tempPasswords: [], skipped: 0, files: 0, problems }; let meNewId = null;
     const r = await this.mutate(doc => {
       const me = this.check(doc, token); if (me.role !== 'admin') throw E.forbid('الاستيراد لمدير النظام فقط.');
       /* تخطيط كامل قبل أي تعديل: أي تعارض يرفض الاستيراد كله دون أن يمس البيانات */
@@ -612,7 +723,7 @@ export class Server {
         plan.push({ iu, u, target: byId || byName || null });
       }
       const remap = {}; for (const p of plan) if (p.target && p.target.id !== p.u.id) remap[p.target.id] = p.u.id;
-      report.counts = {}; report.tempPasswords = []; report.skipped = 0; meNewId = remap[me.id] || null;
+      report.counts = {}; report.tempPasswords = []; report.skipped = (Array.isArray(P.users) ? P.users.length : 0) - incoming.length; meNewId = remap[me.id] || null;
       for (const p of plan) {
         const { iu, u, target } = p; const oldSec = target ? doc.secrets[target.id] : null;
         let inc = fromCloud ? (P.credentials && P.credentials[iu.id]) : (iu.hash && iu.salt ? { algo: 'sha256', salt: iu.salt, hash: iu.hash, mustChange: !!iu.mustChange } : null);
@@ -630,10 +741,10 @@ export class Server {
       report.counts.users = incoming.length;
       for (const c of COLLS) {
         if (c === 'users' || !Array.isArray(P[c])) continue; let n = 0;
-        for (const r0 of P[c]) { if (!isObj(r0) || typeof r0.id !== 'string' || !ID_RE.test(r0.id) || Buffer.byteLength(JSON.stringify(r0)) > LIMITS.record) { report.skipped++; continue; } const rr = jsonClone(r0); const i = doc.data[c].findIndex(x => x.id === rr.id); if (i >= 0) doc.data[c][i] = rr; else doc.data[c].push(rr); n++; }
+        for (const r0 of P[c]) { if (!valid(c, r0)) { report.skipped++; continue; } const rr = jsonClone(r0); const i = doc.data[c].findIndex(x => x.id === rr.id); if (i >= 0) doc.data[c][i] = rr; else doc.data[c].push(rr); n++; }
         report.counts[c] = n;
       }
-      if (isObj(P.settings) && Buffer.byteLength(JSON.stringify(P.settings)) <= LIMITS.settings) doc.settings = jsonClone(P.settings);
+      if (settingsOk) doc.settings = jsonClone(P.settings);
       if (fromCloud && isObj(P.counters)) { doc.counters = doc.counters || {}; for (const [k, v] of Object.entries(P.counters)) if (Number.isInteger(v) && (!Number.isInteger(doc.counters[k]) || doc.counters[k] < v)) doc.counters[k] = v; }
       if (Array.isArray(P.audit)) {
         const have = new Set(doc.audit.map(a => a.id)); let added = 0;
@@ -668,7 +779,7 @@ export class Server {
         const r = rankOf(user); const att = doc.data.attachments.find(a => a.path === path) || null; const notice = doc.data.contracts.some(c => c.noticeFile === path);
         if (m === 'GET') { if (!this.canSeeFile(doc, user, path, att)) throw E.notFound('الملف غير موجود.'); return { user, att }; }
         if (r < 1) throw E.forbid('حساب المتابعة للاطلاع فقط ولا يملك صلاحية التعديل.');
-        if (m === 'DELETE') { if (att ? (att.uploadedBy !== user.id && r < 2) : r < 2) throw E.forbid(); return { user, att }; }
+        if (m === 'DELETE') { if (notice ? r < 2 : att ? (att.uploadedBy !== user.id && r < 2) : r < 2) throw E.forbid(); return { user, att }; }
         const k = doc.data.contracts.find(c => c.id === path.split('/')[1]); if (!k) throw E.bad('العقد غير موجود.');
         if (r < 2 && !this.onTeam(doc, user, k.id)) throw E.forbid('لست ضمن فريق تقييم هذا العقد.');
         if (att || notice) throw E.exists();

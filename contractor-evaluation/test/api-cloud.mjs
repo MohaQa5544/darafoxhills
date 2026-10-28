@@ -142,7 +142,8 @@ await t('follow-up account sees everything and can change nothing', async () => 
 });
 await t('only approvers approve; only admin reopens; company status for approvers', async () => {
   let d = await load('head'); let c = d.cycles.find(x => x.id === cy1.id);
-  const cons = Object.assign({}, c, { status: 'consolidated', consolidated: { total: 7.5, rating: 'good', axes: [] }, reviewedBy: U.head, updatedAt: now() }); eq((await put('head', 'cycles', cons, c.updatedAt)).status, 200);
+  eq((await put('head', 'cycles', Object.assign({}, c, { status: 'consolidated', consolidated: { total: 7.5, rating: 'good', axes: [], evaluationIds: [], count: 0 }, updatedAt: now() }), c.updatedAt)).status, 409, 'consolidation that leaves out a submitted evaluation');
+  const cons = Object.assign({}, c, { status: 'consolidated', consolidated: { total: 7.5, rating: 'good', axes: [], evaluationIds: [ev1.id], count: 1 }, reviewedBy: U.head, updatedAt: now() }); eq((await put('head', 'cycles', cons, c.updatedAt)).status, 200);
   eq((await put('head', 'cycles', Object.assign({}, cons, { status: 'approved', approvedBy: U.head, updatedAt: now() }), cons.updatedAt)).status, 403);
   await first('waqf', 'temp-waqf1', 'Waqf#2026');
   const appr = Object.assign({}, cons, { status: 'approved', approvedBy: U.waqf, approvedAt: now(), consequence: 'improvement', updatedAt: now() }); eq((await put('waqf', 'cycles', appr, cons.updatedAt)).status, 200);
@@ -318,6 +319,58 @@ await t('server core: lost write replies, batched writes and rejected jobs', asy
   const b = srv.mutate(d => { d.data.projects.push({ id: 'p-ok' }); });
   const [ra, rb] = await Promise.allSettled([a, b]); eq(ra.status, 'rejected'); eq(rb.status, 'fulfilled');
   const ids = (await srv.readDoc(true)).doc.data.projects.map(p => p.id); ok(ids.includes('p-ok') && !ids.includes('p-partial'), ids.join(','));
+});
+await t('an approved cycle is locked: only the objection changes, and only approvers decide it', async () => {
+  const cy = { id: randomUUID(), contractId: k1.id, type: 'interim', label: 'دورة القفل', status: 'open', method: 'mean', excluded: [], evalWeights: {} }; eq((await put('head', 'cycles', cy)).status, 200);
+  const ev = { id: randomUUID(), cycleId: cy.id, contractId: k1.id, evaluatorId: U.eng1, status: 'submitted', scores: { c1_1: { s: 6 } }, computed: { total: 6, axes: [] }, submittedAt: now() }; eq((await put('eng1', 'evaluations', ev)).status, 200);
+  const c = (await load('head')).cycles.find(x => x.id === cy.id);
+  const cons = Object.assign({}, c, { status: 'consolidated', consolidated: { total: 6, rating: 'acceptable', axes: [], evaluationIds: [ev.id], count: 1, method: 'mean' }, updatedAt: now() }); eq((await put('head', 'cycles', cons, c.updatedAt)).status, 200);
+  const appr = Object.assign({}, cons, { status: 'approved', approvedBy: U.waqf, approvedAt: now(), consequence: 'improvement', updatedAt: now() }); eq((await put('waqf', 'cycles', appr, cons.updatedAt)).status, 200);
+  eq((await put('head', 'cycles', Object.assign({}, appr, { consolidated: Object.assign({}, appr.consolidated, { total: 9.8, rating: 'excellent' }), updatedAt: now() }), appr.updatedAt)).status, 403, 'section head rewrote an approved result');
+  eq((await put('head', 'cycles', Object.assign({}, appr, { status: 'closed', updatedAt: now() }), appr.updatedAt)).status, 403, 'approved → closed by a section head');
+  const evNow = (await load('head')).evaluations.find(x => x.id === ev.id);
+  eq((await put('head', 'evaluations', Object.assign({}, evNow, { status: 'returned', returnedNote: 'x', returnedBy: U.head, updatedAt: now() }), evNow.updatedAt)).status, 403, 'evaluation returned on a locked cycle');
+  const obj = Object.assign({}, appr, { objection: { date: '2026-10-28', text: 'تظلم', recordedBy: U.head }, updatedAt: now() }); eq((await put('head', 'cycles', obj, appr.updatedAt)).status, 200, 'objection recorded');
+  const decided = by => Object.assign({}, obj, { objection: Object.assign({}, obj.objection, { outcome: 'rejected', decision: 'رفض', decidedBy: by, decidedAt: now() }), updatedAt: now() });
+  eq((await put('head', 'cycles', decided(U.head), obj.updatedAt)).status, 403, 'section head decided an objection');
+  eq((await put('waqf', 'cycles', decided(U.waqf), obj.updatedAt)).status, 200, 'approver decides the objection');
+});
+await t('a batch saves several records together or not at all', async () => {
+  const c = (await load('admin')).companies.find(x => x.id === comp.id);
+  const p = { id: randomUUID(), name: 'مشروع الدفعة', type: 'other', updatedAt: now() }; const c1 = Object.assign({}, c, { notes: 'من الدفعة', updatedAt: now() });
+  const r = await rpc('batch', { items: [{ coll: 'projects', rec: p, base: null }, { coll: 'companies', rec: c1, base: c.updatedAt }] }, S.admin); eq(r.status, 200); eq(r.body.patches.length, 2);
+  const p2 = { id: randomUUID(), name: 'لن يُحفظ', type: 'other', updatedAt: now() };
+  const r2 = await rpc('batch', { items: [{ coll: 'projects', rec: p2, base: null }, { coll: 'companies', rec: Object.assign({}, c1, { notes: 'قديم', updatedAt: now() }), base: c.updatedAt }] }, S.admin);
+  eq(r2.status, 409); ok(!(await load('admin')).projects.some(x => x.id === p2.id), 'the first item was saved although the batch failed');
+  const l = { id: randomUUID(), contractId: k1.id, type: 'notice', subject: 'خطاب دفعة', to: 'x', bodyHtml: '<p>x</p>', issuedAt: now(), issuedBy: U.admin, updatedAt: now() };
+  const r3 = await rpc('batch', { items: [{ coll: 'letters', rec: l, base: null }] }, S.admin); eq(r3.status, 200); ok(r3.body.patches[0] && r3.body.patches[0].refNo, 'letter number in a batch');
+  eq((await rpc('batch', { items: [] }, S.admin)).status, 400); eq((await rpc('batch', { items: [{ coll: 'projects', rec: p, base: p.updatedAt }, { coll: 'projects', rec: p, base: p.updatedAt }] }, S.admin)).status, 400, 'duplicate record in one batch');
+  eq((await rpc('batch', { items: [{ coll: 'projects', rec: { id: randomUUID(), name: 'x', type: 'other' }, base: null }] }, S.sec)).status, 403, 'follow-up account');
+});
+await t('letter numbers continue after the highest imported number', async () => {
+  const y = new Date().getFullYear(); const prefix = (await load('admin')).settings.letterRefPrefix || '';
+  const imported = [900, 901, 902].map(n => ({ id: randomUUID(), contractId: k1.id, type: 'notice', subject: 'خطاب أوفلاين ' + n, to: 'x', bodyHtml: '<p>x</p>', refNo: `${prefix}${y}/${n}`, issuedAt: now() }));
+  eq((await rpc('import', { payload: { letters: imported } }, S.admin)).status, 200);
+  const r = await put('admin', 'letters', { id: randomUUID(), contractId: k1.id, type: 'notice', subject: 'بعد الاستيراد', to: 'x', bodyHtml: '<p>x</p>', issuedAt: now(), issuedBy: U.admin }); eq(r.status, 200);
+  ok(/\/903$/.test(r.body.patch.refNo), 'next number ' + r.body.patch.refNo);
+});
+await t('malformed records are refused before they can break other users\' screens', async () => {
+  const cy = { id: randomUUID(), contractId: k1.id, type: 'final', label: 'x', status: 'open', method: 'mean', excluded: [], evalWeights: {} };
+  eq((await put('eng1', 'cycles', Object.assign({}, cy, { dueDate: { toString: 1 } }))).status, 400, 'object as a date');
+  eq((await put('head', 'companies', { id: randomUUID(), name_ar: { toString: 1 }, roles: ['contractor'] })).status, 400, 'object as a name');
+  eq((await put('head', 'companies', { id: randomUUID(), roles: ['contractor'] })).status, 400, 'company without a name');
+  eq((await put('head', 'companies', { id: randomUUID(), name_ar: 'شركة', roles: ['contractor'], extra: { nested: { constructor: 1 } } })).status, 400, 'prototype key in a nested object');
+  eq((await rpc('put', { coll: 'projects', rec: JSON.parse('{"id":"' + randomUUID() + '","name":"x","__proto__":{"admin":true}}') }, S.head)).status, 400, '__proto__ key');
+  eq((await put('eng1', 'evaluations', { id: randomUUID(), cycleId: cy1.id, contractId: k1.id, evaluatorId: U.eng1, status: 'draft', scores: { c1_1: { s: '7' } } })).status, 400, 'score as text');
+  const t0 = (await load('waqf')).templates[0];
+  eq((await put('waqf', 'templates', Object.assign({}, t0, { id: randomUUID(), version: 99, axes: [Object.assign({}, t0.axes[0], { items: [Object.assign({}, t0.axes[0].items[0], { key: '__proto__' })] })] }))).status, 400, 'question key __proto__');
+  eq((await put('waqf', 'templates', Object.assign({}, t0, { id: randomUUID(), version: 99, axes: [Object.assign({}, t0.axes[0], { key: 'Bad Key' })] }))).status, 400, 'axis key with spaces');
+  eq((await rpc('settings', { settings: JSON.parse('{"appName":"x","__proto__":{"polluted":1}}') }, S.admin)).status, 400, 'settings with __proto__');
+});
+await t('the logout audit entry ignores text sent by the browser', async () => {
+  eq((await rpc('audit', { entry: { action: 'logout', entity: '=1+1', entityId: '=HYPERLINK("http://x.invalid")', detail: { name: '=2+3' } } }, S.sec)).status, 200);
+  const e = JSON.parse((await rpc('export', {}, S.admin)).body.json); const last = e.audit.filter(a => a.action === 'logout' && a.actor === U.sec).pop();
+  ok(last, 'logout entry missing'); eq(last.entity, 'users'); eq(last.entityId, U.sec); eq(last.detail, null);
 });
 await t('a restarted server reads the persisted state', async () => {
   stop(); await new Promise(r => setTimeout(r, 500));
