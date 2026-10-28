@@ -1,0 +1,57 @@
+/* شاشة التقييم — الأسئلة محوراً محوراً، درجة من 0 إلى 10، ملاحظات ومرفقات، حفظ تلقائي، تقديم */
+(function (EV) {
+  const { esc, L, B, byId, list, fmtNum, fmtDate, badge, ratingBadge, field, opts, uid } = EV;
+  const st = EV.state; const R = EV.route, A = EV.actions;
+  let cur = null, saveTimer = null;
+  const attsOf = e => list('attachments', a => a.evaluationId === e.id);
+  const attachedKeys = e => new Set(attsOf(e).map(a => a.itemKey).filter(Boolean));
+  const canEdit = e => e.evaluatorId === st.user.id && (e.status === 'draft' || e.status === 'returned');
+  const canView = (e, cy) => { if (e.evaluatorId === st.user.id || EV.isManager()) return true; if (e.status !== 'submitted') return false; const v = st.settings.visibility; if (v === 'managers') return false; if (v === 'always') return true; return list('evaluations', x => x.cycleId === cy.id && x.evaluatorId === st.user.id && x.status === 'submitted').length > 0; };
+
+  function chips(it, sc, editable) {
+    const v = sc.na ? 'na' : (sc.s == null || sc.s === '' ? null : Number(sc.s));
+    return `<div class="chips" role="group" aria-label="الدرجة">${[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => { const s = B.scaleFor(n); return `<button type="button" class="chip ${v === n ? 'on' : ''}" style="--c:${s.color}" data-act="score" data-item="${it.key}" data-val="${n}" ${editable ? '' : 'disabled'} title="${esc(s.name)}">${n}</button>`; }).join('')}<button type="button" class="chip na ${v === 'na' ? 'on' : ''}" data-act="score" data-item="${it.key}" data-val="na" ${editable ? '' : 'disabled'}>غير منطبق</button></div><div class="scale-hint" id="sh_${it.key}">${v != null && v !== 'na' ? `<b style="color:${B.scaleFor(v).color}">${B.scaleFor(v).name}:</b> ${esc(B.scaleFor(v).text)} <small>(الدليل: ${esc(B.scaleFor(v).evidence)})</small>` : (v === 'na' ? 'يُستبعد هذا البند ويُعاد توزيع وزنه. اذكر السبب في الملاحظة.' : '')}</div>`;
+  }
+  function itemBlock(it, idx, e, editable, atts) {
+    const sc = e.scores[it.key] || {}; const mine = atts.filter(a => a.itemKey === it.key);
+    return `<div class="item ${it.critical ? 'critical' : ''}" id="it_${it.key}"><div class="item-head"><span class="item-no">${idx}</span><div class="item-text"><p>${esc(it.text)} ${it.critical ? '<span class="crit">بند حاسم</span>' : ''} ${it.importance > 1 ? `<span class="imp">أهمية ×${it.importance}</span>` : ''}</p>${it.hint ? `<small class="hint">الدليل المقترح: ${esc(it.hint)}</small>` : ''}</div></div>${chips(it, sc, editable)}
+      <div class="item-foot"><textarea class="note-in" placeholder="ملاحظة / مرجع الدليل (إلزامية للدرجات الطرفية)" data-input="note" data-item="${it.key}" rows="1" ${editable ? '' : 'disabled'}>${esc(sc.n || '')}</textarea>
+      <div class="atts">${mine.map(a => `<span class="att"><button class="linkbtn" data-act="openFile" data-path="${esc(a.path)}">📎 ${esc(a.name)}</button>${editable ? `<button class="icon-btn" data-act="delAtt" data-id="${a.id}" title="حذف">✕</button>` : ''}</span>`).join('')}${editable ? `<label class="btn small ghost">📎 إرفاق<input type="file" multiple hidden data-change="attach" data-item="${it.key}"></label>` : ''}</div></div></div>`;
+  }
+  function panel(e, t, w, k, cy) {
+    const r = EV.compute(t, w, e.scores, st.settings, attachedKeys(e)); e.computed = r;
+    const pct = r.totalItems ? Math.round(r.answered / r.totalItems * 100) : 0;
+    return `<div class="score-panel"><div class="total-box"><span class="lbl">الدرجة الكلية الحالية</span><div class="big-score">${r.total == null ? '—' : fmtNum(r.total)}<small>/10</small></div>${ratingBadge(r.rating)}</div><div class="progress"><div style="width:${pct}%"></div></div><small class="muted">${r.answered} من ${r.totalItems} سؤالاً (${pct}%)</small>
+      <table class="axis-mini">${r.axes.map(a => `<tr><td><a href="#ax_${a.key}">${esc(a.name)}</a></td><td class="num muted">${a.weight}%</td><td class="num"><b>${a.score == null ? '—' : fmtNum(a.score)}</b>${a.critical ? ' ⛔' : ''}</td></tr>`).join('')}</table>
+      ${r.missingEvidence.length ? `<div class="note bad small">${r.missingEvidence.length} درجة طرفية بلا ملاحظة أو مرفق: ${r.missingEvidence.map(k2 => `<a href="#it_${k2}">${esc(k2)}</a>`).join('، ')}</div>` : ''}${r.critical ? '<div class="note bad small">يوجد بند حاسم بدرجة 0: سيُصنَّف التقييم «تقرير سلبي» بعد تأكيد المراجع.</div>' : ''}</div>`;
+  }
+
+  R(/^#\/eval\/(.+)$/, id => {
+    const e = byId('evaluations', id); if (!e) return EV.navigate('#/home'); const cy = byId('cycles', e.cycleId); const k = byId('contracts', e.contractId); if (!cy || !k) return EV.navigate('#/home');
+    if (!canView(e, cy)) { EV.toast('لا يمكنك الاطلاع على هذا التقييم قبل تقديم تقييمك', 'warn'); return EV.navigate('#/cycle/' + cy.id); }
+    const t = byId('templates', e.templateId) || EV.templateFor(k, cy); const w = EV.weightsFor(k, t, cy); const editable = canEdit(e); const atts = attsOf(e); cur = { e, t, w, k, cy };
+    const comp = byId('companies', k.companyId) || {};
+    let idx = 0;
+    EV.page(`<div class="eval-head card"><div><h2>${esc(comp.name_ar)} <small>${L.role[k.role]}</small></h2><p class="muted">${esc(EV.projectName(k.projectId))} · ${L.cycleType[cy.type]} · ${esc(cy.label)} · النموذج: ${esc(t.name)} (إصدار ${t.version})</p><p>المقيّم: <b>${esc(EV.userName(e.evaluatorId))}</b> · ${badge(L.evalStatus[e.status], e.status === 'submitted' ? 'ok' : 'warn')}${e.submittedAt ? ` · قُدّم في ${fmtDate(e.submittedAt)}` : ''}</p>${e.status === 'returned' && e.returnedNote ? `<div class="note warn">أُعيد إليك للمراجعة: ${esc(e.returnedNote)}</div>` : ''}</div><div class="row gap"><a class="btn" href="#/cycle/${cy.id}">المقارنة</a><a class="btn" href="#/contract/${k.id}">العقد</a>${editable ? `<button class="btn primary" data-act="submitEval">تقديم التقييم</button>` : ''}</div></div>
+      <div class="eval-layout"><div class="eval-main">${t.axes.map((ax, ai) => `<section class="axis card" id="ax_${ax.key}"><div class="axis-head"><h3>${ai + 1} · ${esc(ax.name)}</h3><span class="wt">الوزن ${w[ax.key]}%</span><span class="axis-score" id="as_${ax.key}"></span></div>${ax.items.filter(i => i.enabled !== false).map(it => itemBlock(it, ++idx, e, editable, atts)).join('')}</section>`).join('')}
+        <section class="card"><h3>الخلاصة</h3><div class="grid2">${field('نقاط القوة', `<textarea rows="3" data-input="summary" data-f="strengths" ${editable ? '' : 'disabled'}>${esc(e.strengths || '')}</textarea>`)}${field('نقاط الضعف', `<textarea rows="3" data-input="summary" data-f="weaknesses" ${editable ? '' : 'disabled'}>${esc(e.weaknesses || '')}</textarea>`)}${field('توصية المقيّم', `<select data-change="summary" data-f="recommendation" ${editable ? '' : 'disabled'}><option value="">— اختر —</option>${opts(L.recommendation, e.recommendation)}</select>`)}</div>${editable ? `<div class="row gap"><button class="btn primary big" data-act="submitEval">تقديم التقييم</button><span class="muted" id="save-state">يُحفظ تلقائياً</span></div>` : ''}</section></div>
+        <aside class="eval-side" id="eval-side">${panel(e, t, w, k, cy)}</aside></div>`, { title: 'تقييم ' + comp.name_ar, wide: true });
+    refreshAxisScores();
+  });
+  function refreshAxisScores() { const { e, t, w, k, cy } = cur; const side = document.getElementById('eval-side'); if (side) side.innerHTML = panel(e, t, w, k, cy); e.computed.axes.forEach(a => { const el = document.getElementById('as_' + a.key); if (el) el.textContent = a.score == null ? '' : fmtNum(a.score) + ' / 10'; }); }
+  function scheduleSave() { clearTimeout(saveTimer); const el = document.getElementById('save-state'); if (el) el.textContent = 'جارٍ الحفظ…'; saveTimer = setTimeout(async () => { await EV.save('evaluations', cur.e, null); if (el) el.textContent = 'تم الحفظ ' + new Date().toLocaleTimeString('ar-QA-u-nu-latn', { hour: '2-digit', minute: '2-digit' }); }, 500); }
+  A.score = el => { const { e, t } = cur; if (!canEdit(e)) return; const key = el.dataset.item, v = el.dataset.val; const sc = e.scores[key] = e.scores[key] || {}; if (v === 'na') { sc.na = !sc.na; sc.s = null; } else { sc.na = false; sc.s = Number(v); } const it = t.axes.flatMap(a => a.items).find(i => i.key === key); const box = el.closest('.item'); const sel = box.querySelector('.chips'); sel.outerHTML = chips(it, sc, true).replace(/<div class="scale-hint"[\s\S]*$/, ''); const hint = box.querySelector('.scale-hint'); const nh = document.createElement('div'); nh.innerHTML = chips(it, sc, true); hint.replaceWith(nh.querySelector('.scale-hint')); refreshAxisScores(); scheduleSave(); };
+  A['input:note'] = el => { const sc = cur.e.scores[el.dataset.item] = cur.e.scores[el.dataset.item] || {}; sc.n = el.value; el.style.height = 'auto'; el.style.height = (el.scrollHeight) + 'px'; refreshAxisScores(); scheduleSave(); };
+  A['input:summary'] = el => { cur.e[el.dataset.f] = el.value; scheduleSave(); };
+  A['change:summary'] = el => { cur.e[el.dataset.f] = el.value; scheduleSave(); };
+  A['change:attach'] = async el => { const { e, k, cy, t } = cur; const key = el.dataset.item; const ax = t.axes.find(a => a.items.some(i => i.key === key)); for (const f of el.files) { const safe = f.name.replace(/[\\/:*?"<>|]/g, '_'); const path = `attachments/${k.id}/${uid().slice(0, 8)}__${safe}`; try { await st.store.saveFile(path, f); await EV.save('attachments', { id: uid(), contractId: k.id, cycleId: cy.id, evaluationId: e.id, axisKey: ax ? ax.key : null, itemKey: key, path, name: f.name, size: f.size, mime: f.type, uploadedBy: st.user.id }, 'attachment_add'); } catch (err) { EV.toast(err.message, 'bad'); } } EV.toast('تم إرفاق الملفات', 'ok'); EV.render(); };
+  A.delAtt = async el => { const a = byId('attachments', el.dataset.id); if (!a) return; if (!(await EV.confirm('حذف المرفق؟'))) return; await st.store.deleteFile(a.path); await EV.remove('attachments', a.id); EV.render(); };
+  A.submitEval = async () => {
+    const { e, t, w, cy } = cur; const r = EV.compute(t, w, e.scores, st.settings, attachedKeys(e));
+    if (!r.complete) return EV.toast(`بقي ${r.totalItems - r.answered} سؤالاً بلا درجة. أجب عنها أو اختر «غير منطبق».`, 'bad');
+    if (r.missingEvidence.length) return EV.toast('الدرجات الطرفية (' + st.settings.evidenceLow + ' فأقل أو ' + st.settings.evidenceHigh + ' فأكثر) تحتاج ملاحظة أو مرفقاً: ' + r.missingEvidence.length + ' بند', 'bad');
+    if (!e.recommendation) return EV.toast('اختر توصية المقيّم في الخلاصة', 'bad');
+    const ok = await EV.modal({ title: 'تقديم التقييم', okText: 'تقديم نهائي', body: `<p>الدرجة الكلية <b>${fmtNum(r.total)}</b> من 10 — ${ratingBadge(r.rating)}</p>${r.critical ? '<div class="note bad">يوجد بند حاسم بدرجة 0، وسيُعرض التقييم كتقرير سلبي.</div>' : ''}<p class="muted">بعد التقديم لا يمكنك تعديل الدرجات إلا إذا أعاده إليك رئيس القسم.</p>` });
+    if (!ok) return; e.computed = r; e.status = 'submitted'; e.submittedAt = EV.nowISO(); e.returnedNote = ''; await EV.save('evaluations', e, 'evaluation_submit'); EV.toast('تم تقديم التقييم', 'ok'); EV.navigate('#/cycle/' + cy.id);
+  };
+})(window.EV);

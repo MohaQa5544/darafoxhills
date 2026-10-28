@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>سجل الأداء — تقييم أداء المقاولين والاستشاريين</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@400;500;700&family=Noto+Sans+Arabic:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="app"><div class="setup"><div class="setup-card"><h1>سجل الأداء</h1><p class="muted">جارٍ التحميل…</p></div></div></div>
+<div id="toast"></div>
+<div id="modal" hidden></div>
+<script src="logos.js"></script>
+<script src="bank.js"></script>
+<script src="texts.js"></script>
+<script src="users.local.js" onerror="console.info('users.local.js غير موجود: سيُنشأ حساب مدير النظام فقط')"></script>
+<script src="store.js"></script>
+<script src="core.js"></script>
+<script src="screens.js"></script>
+<script src="eval.js"></script>
+<script src="review.js"></script>
+<script src="reports.js"></script>
+<script src="settings.js"></script>
+<script>window.addEventListener('DOMContentLoaded', function(){ window.EV.boot().catch(function(e){ console.error(e); document.getElementById('app').innerHTML = '<div class="setup"><div class="setup-card"><h1>تعذر تشغيل البرنامج</h1><p>' + (e && e.message) + '</p></div></div>'; }); });</script>
+</body>
+</html>

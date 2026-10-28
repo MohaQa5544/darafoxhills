@@ -2,3 +2,5 @@
 *.local.*
 dist/
 .env
+app/dist/
+test/shots/
