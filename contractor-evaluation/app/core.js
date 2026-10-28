@@ -38,10 +38,12 @@ window.EV = (function () {
   const hashPassword = (pw, salt) => sha256(salt + ':' + pw);
 
   /* ---------- الصلاحيات ---------- */
-  const RANK = { engineer: 1, section_head: 2, assistant_director: 3, director: 4, admin: 5 };
+  const RANK = { secretary: 0, engineer: 1, section_head: 2, assistant_director: 3, waqf_dev_head: 3, director: 4, admin: 5 };
   const rank = () => state.user ? (RANK[state.user.role] || 0) : 0;
   const isManager = () => rank() >= 2, isApprover = () => rank() >= 3, isAdmin = () => state.user && state.user.role === 'admin';
-  function can(what) { switch (what) { case 'manage': return isManager(); case 'approve': return isApprover(); case 'admin': return isAdmin(); case 'templates': return isApprover(); case 'audit': return isApprover(); default: return !!state.user; } }
+  const canEvaluate = () => !!state.user && state.user.role !== 'secretary';
+  const canViewAll = () => isManager() || (!!state.user && state.user.role === 'secretary');
+  function can(what) { switch (what) { case 'evaluate': return canEvaluate(); case 'viewAll': return canViewAll(); case 'manage': return isManager(); case 'approve': return isApprover(); case 'admin': return isAdmin(); case 'templates': return isApprover(); case 'audit': return isApprover(); default: return !!state.user; } }
 
   /* ---------- البيانات ---------- */
   const byId = (coll, id) => (state.data && state.data[coll] || []).find(r => r.id === id);
@@ -208,5 +210,5 @@ window.EV = (function () {
     render();
   }
 
-  return { state, routes, actions, forms, route, navigate, render, page, printPage, setOrientation, boot, reload, useLocal, $, esc, uid, clone, nowISO, today, fmtDate, fmtDateTime, fmtNum, fmtMoney, addDays, sha256, hashPassword, can, isManager, isApprover, isAdmin, byId, list, save, remove, audit, userName, companyName, projectName, login, logout, setPassword, activeTemplate, templateFor, weightsFor, ratingFor, compute, consolidate, companyScores, suggestedConsequence, isSmallContract, toast, modal, confirm, badge, ratingBadge, field, opts, formData, L, B, screens: {} };
+  return { state, routes, actions, forms, route, navigate, render, page, printPage, setOrientation, boot, reload, useLocal, $, esc, uid, clone, nowISO, today, fmtDate, fmtDateTime, fmtNum, fmtMoney, addDays, sha256, hashPassword, can, isManager, isApprover, isAdmin, canEvaluate, canViewAll, byId, list, save, remove, audit, userName, companyName, projectName, login, logout, setPassword, activeTemplate, templateFor, weightsFor, ratingFor, compute, consolidate, companyScores, suggestedConsequence, isSmallContract, toast, modal, confirm, badge, ratingBadge, field, opts, formData, L, B, screens: {} };
 })();

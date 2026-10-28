@@ -258,7 +258,7 @@ window.EV_BANK = (function () {
   B.labels = {
     role: { designer: 'مكتب تصميم', supervisor: 'مكتب إشراف', contractor: 'مقاول', small: 'عقد صغير', post_occupancy: 'ما بعد التشغيل' },
     roleLong: { designer: 'الاستشاري المصمم', supervisor: 'الاستشاري المشرف', contractor: 'المقاول الرئيسي' },
-    userRole: { admin: 'مدير النظام', director: 'مدير الإدارة', assistant_director: 'مساعد مدير الإدارة', section_head: 'رئيس القسم', engineer: 'مهندس مقيّم' },
+    userRole: { admin: 'مدير النظام', director: 'مدير الإدارة', assistant_director: 'مساعد مدير الإدارة', waqf_dev_head: 'رئيس قسم تنمية الوقف', section_head: 'رئيس القسم', engineer: 'مهندس مقيّم', secretary: 'سكرتير مدير الإدارة (متابعة)' },
     rating: { excellent: 'ممتاز', very_good: 'جيد جداً', good: 'جيد', acceptable: 'مقبول', weak: 'ضعيف', negative: 'تقرير سلبي', none: 'غير محسوب' },
     ratingClass: { excellent: 'ok', very_good: 'ok', good: 'soft', acceptable: 'warn', weak: 'bad', negative: 'bad', none: 'muted' },
     cycleType: { interim: 'تقييم مرحلي', final: 'تقييم نهائي', post: 'ما بعد العقد (فترة الضمان)', post_occupancy: 'ما بعد التشغيل (بعد سنة)' },

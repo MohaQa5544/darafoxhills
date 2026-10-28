@@ -6,7 +6,7 @@
   const attsOf = e => list('attachments', a => a.evaluationId === e.id);
   const attachedKeys = e => new Set(attsOf(e).map(a => a.itemKey).filter(Boolean));
   const canEdit = e => e.evaluatorId === st.user.id && (e.status === 'draft' || e.status === 'returned');
-  const canView = (e, cy) => { if (e.evaluatorId === st.user.id || EV.isManager()) return true; if (e.status !== 'submitted') return false; const v = st.settings.visibility; if (v === 'managers') return false; if (v === 'always') return true; return list('evaluations', x => x.cycleId === cy.id && x.evaluatorId === st.user.id && x.status === 'submitted').length > 0; };
+  const canView = (e, cy) => { if (e.evaluatorId === st.user.id || EV.canViewAll()) return true; if (e.status !== 'submitted') return false; const v = st.settings.visibility; if (v === 'managers') return false; if (v === 'always') return true; return list('evaluations', x => x.cycleId === cy.id && x.evaluatorId === st.user.id && x.status === 'submitted').length > 0; };
 
   function chips(it, sc, editable) {
     const v = sc.na ? 'na' : (sc.s == null || sc.s === '' ? null : Number(sc.s));
