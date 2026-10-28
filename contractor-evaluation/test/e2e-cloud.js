@@ -89,6 +89,26 @@ const bigFile = { name: 'ملف كبير.bin', mimeType: 'application/octet-stre
     await page.goto(URL + '#/settings/backup'); await page.waitForSelector('[data-act="exportBackup"]'); const [dl] = await Promise.all([page.waitForEvent('download'), page.click('[data-act="exportBackup"]')]); const f = path.join(fixDir, 'backup.json'); await dl.saveAs(f); const j = JSON.parse(fs.readFileSync(f, 'utf8')); if (j.scope !== 'full' || !j.credentials) throw new Error('نسخة المدير ناقصة');
     await page.setInputFiles('input[data-change="importBackup"]', f); await page.waitForSelector('#modal [data-m="ok"]'); await page.click('#modal [data-m="ok"]'); await page.waitForSelector('text=تم الاستيراد'); await snap('05-import'); await page.click('#modal [data-m="ok"]'); await page.waitForTimeout(400);
   });
+  await step('بيانات خبيثة في السجلات والخطابات تُعرض نصاً ولا تُحقن في الصفحة', async () => {
+    const ids = await page.evaluate(async () => {
+      const EV = window.EV, me = EV.state.user.id, k = EV.state.data.contracts[0];
+      const comp = { id: EV.uid(), name_ar: 'شركة <img src=x id=pwn1> للاختبار', roles: ['contractor'], status: 'normal' }; await EV.save('companies', comp);
+      const cy = { id: EV.uid(), contractId: k.id, type: 'interim', label: 'دورة اختبار الحقن', status: 'open', method: 'weighted', excluded: [], evalWeights: { 'x"><img src=x id=pwn3>': 2, [me]: '2"><img src=x id=pwn3>' }, consolidated: { count: '<meta http-equiv="refresh" content="0;url=about:blank#pwned"><img src=x id=pwn2>', total: 7, rating: 'good', axes: [], method: 'mean' } }; await EV.save('cycles', cy);
+      const t = EV.templateFor(k, cy), sc = {}; t.axes.forEach(a => a.items.forEach(i => { sc[i.key] = { s: 7 }; }));
+      await EV.save('evaluations', { id: EV.uid(), cycleId: cy.id, contractId: k.id, evaluatorId: me, templateId: t.id, status: 'submitted', scores: sc, recommendation: 'accepted', computed: EV.compute(t, EV.weightsFor(k, t, cy), sc), submittedAt: EV.nowISO() });
+      const l = { id: EV.uid(), contractId: k.id, cycleId: null, type: 'notice', refNo: 'TEST/001', subject: 'خطاب اختبار', to: 'السادة / شركة الاختبار<br><img src=x id=pwn5>', bodyHtml: '<form action=x><input name=a></form><img src=x id=pwn4 onerror=alert(1)><p>نص سليم</p>', issuedAt: EV.nowISO(), issuedBy: me }; await EV.save('letters', l);
+      return { comp: comp.id, contract: k.id, cycle: cy.id, letter: l.id };
+    });
+    const visit = async (hash, sel, where) => { await page.goto(URL + hash); await page.waitForTimeout(700); const r = await page.evaluate(() => ({ el: !!document.querySelector('#pwn1,#pwn2,#pwn3,meta[http-equiv]'), hash: location.hash })); if (r.el || r.hash === '#pwned') throw new Error('حقن HTML في ' + where + ': ' + JSON.stringify(r)); await page.waitForSelector(sel, { timeout: 5000 }); };
+    await visit('#/companies', '#rows', 'قائمة الشركات');
+    await visit('#/company/' + ids.comp, '.score-card', 'صفحة الشركة'); if (!(await page.textContent('#main h2')).includes('<img src=x id=pwn1>')) throw new Error('اسم الشركة لم يُعرض نصاً');
+    await visit('#/contract/' + ids.contract, '.notice-card', 'صفحة العقد');
+    await visit('#/cycle/' + ids.cycle, '.weights input.w-in', 'صفحة الدورة'); if (!(await page.textContent('#main')).includes('<meta http-equiv="refresh"')) throw new Error('عدد التقييمات الموحدة لم يُعرض نصاً');
+    await visit('#/report/cycle/' + ids.cycle, '.sheet.report', 'تقرير الدورة');
+    await visit('#/letter/' + ids.letter, '.sheet.letter', 'الخطاب');
+    const l = await page.evaluate(() => ({ bad: !!document.querySelector('.sheet-body form, .sheet-body input, .sheet-body img, #pwn4, #pwn5'), text: document.querySelector('.sheet-body').textContent, br: !!document.querySelector('.sheet-body .to br') }));
+    if (l.bad) throw new Error('بقي نموذج أو صورة في نص الخطاب'); if (!l.text.includes('نص سليم')) throw new Error('حُذف النص السليم من الخطاب'); if (!l.br) throw new Error('حُذف وسم سليم من سطر المرسل إليه');
+  });
   await step('انتهاء الجلسة يعيد إلى شاشة الدخول', async () => { await page.evaluate(() => sessionStorage.setItem('ev_token', 'tampered.token')); await page.reload(); await page.waitForSelector('#login-user', { timeout: 8000 }); });
   await browser.close(); srv.kill();
   console.log(errors.length ? 'ERRORS:\n' + errors.join('\n') : 'No console/page/CSP errors');

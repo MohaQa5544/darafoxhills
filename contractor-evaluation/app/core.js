@@ -5,6 +5,24 @@ window.EV = (function () {
   const routes = []; const actions = {}; const forms = {};
   const $ = s => document.querySelector(s);
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  /* تنقية HTML المخزّن في الخطابات: تبقى وسوم قوالب texts.js وmakeLetter وحدها (أضف هنا أي وسم جديد يُستخدم فيها) وسماتها الآمنة،
+     وتُحذف العناصر النشطة بمحتواها، ويُفكّ أي وسم آخر ويبقى نصه، ولا تبقى أجزاء الجدول إلا داخل جدول حتى لا تخرج من خلية الورقة */
+  const SAFE_TAGS = new Set(['p', 'br', 'b', 'strong', 'div', 'table', 'thead', 'tbody', 'tr', 'th', 'td']), SAFE_ATTRS = new Set(['class', 'dir', 'colspan', 'rowspan']);
+  const DROP_TAGS = new Set(['script', 'style', 'meta', 'link', 'base', 'iframe', 'frame', 'frameset', 'object', 'embed', 'applet', 'form', 'input', 'button', 'textarea', 'select', 'option', 'optgroup', 'datalist', 'svg', 'math', 'img', 'picture', 'video', 'audio', 'source', 'track', 'canvas', 'template', 'noscript', 'noembed', 'noframes', 'title']);
+  const TABLE_PARENT = { thead: ['table'], tbody: ['table'], tr: ['table', 'thead', 'tbody'], th: ['tr'], td: ['tr'] };
+  function safeHtml(html) {
+    const tpl = document.createElement('template'); tpl.innerHTML = String(html == null ? '' : html);
+    (function walk(parent) {
+      for (let n = parent.firstChild, next; n; n = next) {
+        next = n.nextSibling; if (n.nodeType === 3) continue;
+        const tag = n.nodeType === 1 && n.namespaceURI === 'http://www.w3.org/1999/xhtml' ? n.localName : null;
+        if (!tag || DROP_TAGS.has(tag)) { n.remove(); continue; }
+        if (!SAFE_TAGS.has(tag) || n.hasAttribute('is') || (TABLE_PARENT[tag] && !TABLE_PARENT[tag].includes(parent.localName))) { next = n.firstChild || next; n.replaceWith(...n.childNodes); continue; }
+        [...n.attributes].forEach(a => { if (!SAFE_ATTRS.has(a.name)) n.removeAttribute(a.name); }); walk(n);
+      }
+    })(tpl.content);
+    return tpl.innerHTML;
+  }
   const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); }));
   const clone = o => JSON.parse(JSON.stringify(o));
   const nowISO = () => new Date().toISOString();
@@ -151,9 +169,9 @@ window.EV = (function () {
     });
   }
   const confirm = (msg, okText) => modal({ title: 'تأكيد', body: `<p>${esc(msg)}</p>`, okText: okText || 'نعم، متابعة' });
-  const badge = (text, cls) => `<span class="badge b-${cls || 'soft'}">${esc(text)}</span>`;
+  const badge = (text, cls) => `<span class="badge b-${esc(cls || 'soft')}">${esc(text)}</span>`;
   const ratingBadge = code => badge(L.rating[code] || code, L.ratingClass[code] || 'soft');
-  const field = (label, input, hint) => `<label class="field"><span class="lbl">${label}</span>${input}${hint ? `<small class="hint">${hint}</small>` : ''}</label>`;
+  const field = (label, input, hint) => `<label class="field"><span class="lbl">${esc(label)}</span>${input}${hint ? `<small class="hint">${esc(hint)}</small>` : ''}</label>`;
   const opts = (map, sel) => Object.keys(map).map(k => `<option value="${esc(k)}" ${String(sel) === k ? 'selected' : ''}>${esc(map[k])}</option>`).join('');
   function formData(form) { const o = {}; new FormData(form).forEach((v, k) => { if (k.endsWith('[]')) { (o[k.slice(0, -2)] = o[k.slice(0, -2)] || []).push(v); } else o[k] = v; }); form.querySelectorAll('input[type=checkbox]').forEach(c => { if (!c.name.endsWith('[]')) o[c.name] = c.checked; }); return o; }
 
@@ -245,5 +263,5 @@ window.EV = (function () {
     if (safe) window.open(obj, '_blank', 'noopener'); else { const a = document.createElement('a'); a.href = obj; a.download = name || path.split('/').pop().replace(/^([0-9a-f]{8}|notice)__/, ''); document.body.appendChild(a); a.click(); a.remove(); }
     setTimeout(() => URL.revokeObjectURL(obj), 120000);
   }
-  return { state, routes, actions, forms, route, navigate, render, page, printPage, setOrientation, boot, reload, useLocal, $, esc, uid, clone, nowISO, today, fmtDate, fmtDateTime, fmtNum, fmtMoney, addDays, sha256, hashPassword, can, isManager, isApprover, isAdmin, canEvaluate, canViewAll, byId, list, save, remove, audit, userName, companyName, projectName, login, logout, setPassword, isCloud, openStoredFile, activeTemplate, templateFor, weightsFor, ratingFor, compute, consolidate, companyScores, suggestedConsequence, isSmallContract, toast, modal, confirm, badge, ratingBadge, field, opts, formData, L, B, screens: {} };
+  return { state, routes, actions, forms, route, navigate, render, page, printPage, setOrientation, boot, reload, useLocal, $, esc, safeHtml, uid, clone, nowISO, today, fmtDate, fmtDateTime, fmtNum, fmtMoney, addDays, sha256, hashPassword, can, isManager, isApprover, isAdmin, canEvaluate, canViewAll, byId, list, save, remove, audit, userName, companyName, projectName, login, logout, setPassword, isCloud, openStoredFile, activeTemplate, templateFor, weightsFor, ratingFor, compute, consolidate, companyScores, suggestedConsequence, isSmallContract, toast, modal, confirm, badge, ratingBadge, field, opts, formData, L, B, screens: {} };
 })();
