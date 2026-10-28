@@ -36,6 +36,15 @@
 | `BLOB_READ_WRITE_TOKEN` أو `BLOB_STORE_ID` | يضيفها Vercel عند ربط متجر Blob خاص بالمشروع |
 | `SELFTEST_KEY` | اختياري ومؤقت: يفعّل فحص `api/selftest?key=…` على المنصة نفسها، ويُحذف بعد الفحص |
 
+## النشر على Vercel يدوياً (إن لزم)
+1. vercel.com ← Add New ← Project ← استيراد المستودع `MohaQa5544/darafoxhills`.
+2. Root Directory: `contractor-evaluation/app`، وFramework Preset: Other، بلا أمر بناء.
+3. Settings ← Git ← Production Branch: الفرع الذي يحمل هذه النسخة.
+4. Storage ← Create ← Blob بخيار Private، ثم ربطه بالمشروع.
+5. Settings ← Environment Variables (Production فقط): `SESSION_SECRET` و`SEED_USERS`.
+6. Settings ← Deployment Protection ← Vercel Authentication: Only Preview Deployments، حتى يفتح رابط الإنتاج للموظفين دون حساب Vercel.
+7. Deployments ← Redeploy، ثم افتح `‎/api/health` وتأكد أن `configured` تساوي `true`.
+
 ## التشغيل والاختبار محلياً
 ```
 cd app && npm install && cd ..
