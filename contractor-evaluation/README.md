@@ -49,7 +49,7 @@
 ```
 cd app && npm install && cd ..
 node dev/server.mjs --port 8787 --data /tmp/ev-data --reset --instances 2
-node test/api-cloud.mjs      # 49 اختباراً للخادم والصلاحيات والأمان
+node test/api-cloud.mjs      # 53 اختباراً للخادم والصلاحيات والأمان
 node test/server-races.mjs   # أعطال التزامن والتخزين على منطق الخادم نفسه (رد مفقود، ذاكرة قديمة، استعادة نسخة…)
 node test/e2e-cloud.js       # المتصفح كاملاً على النسخة السحابية، مع أعطال مقصودة في الشبكة والخادم
 node test/e2e.js             # النسخة الأوفلاين

@@ -55,22 +55,27 @@
       <div class="card"><h3>نسخة احتياطية</h3><p class="hint">يُنصح بتصدير نسخة شهرياً وحفظها خارج مجلد البيانات. النسخة تشمل ${st.store.mode === 'local' ? 'كل السجلات والمرفقات' : st.store.mode === 'cloud' ? (EV.isAdmin() ? 'كل السجلات وسجل التدقيق وبيانات الدخول المشفّرة (دون ملفات المرفقات التي تبقى في التخزين السحابي). احفظها في مكان آمن' : 'السجلات التي يتيحها لك دورك') : 'كل السجلات (دون ملفات المرفقات التي تبقى في مجلد attachments)'}.${st.store.mode === 'cloud' && EV.isAdmin() ? ' ويمكن هنا استيراد نسخة البرنامج الأوفلاين (مجلد دروب بوكس) لنقل بياناتها إلى النسخة السحابية.' : ''}</p><div class="row gap wrap"><button class="btn primary" data-act="exportBackup">⬇ تصدير نسخة احتياطية (JSON)</button>${EV.isAdmin() ? `<label class="btn">⬆ استيراد نسخة<input type="file" accept=".json" hidden data-change="importBackup"></label>` : ''}</div></div>
       <div class="card"><h3>عن البرنامج</h3><p>${EV.isCloud() ? 'سجل الأداء — نظام تقييم أداء المقاولين والاستشاريين، الإصدار 1.1 (سحابي). يعمل على خادم Vercel ببيانات مشتركة لكل الفريق؛ الدخول وكلمات المرور والصلاحيات محمية على الخادم، وتُحفظ نسخة احتياطية يومية تلقائياً.' : 'سجل الأداء — نظام تقييم أداء المقاولين والاستشاريين، الإصدار 1.0 (أوفلاين). يعمل من مجلد دروب بوكس المشترك دون خادم؛ كل سجل يُحفظ ملفاً مستقلاً داخل <code>data</code> فلا تتعارض تعديلات الزملاء.'} المرجع: المنهجية المرجعية للإدارة العامة للأوقاف (أكتوبر 2026).</p></div>`), { title: 'البيانات' }); });
   A.exportBackup = async () => { EV.download('سجل_الأداء_نسخة_' + EV.today() + '.json', await st.store.exportAll(), 'application/json'); await EV.audit('backup_export', 'system', null); };
-  /* نسخة من البرنامج السحابي تحفظ كلمات المرور خارج سجلات المستخدمين وبتجزئة لا يقرؤها البرنامج الأوفلاين: يحتفظ كل مستخدم موجود
-     بكلمة مروره هنا، ويبدأ الجديد بكلمة 123456 مع إلزامه بتغييرها، ويبقى من يستورد مديراً نشطاً بكلمته الحالية */
+  /* الاستيراد في البرنامج الأوفلاين (نسخة أوفلاين من متصفح أو مجلد آخر، أو نسخة من البرنامج السحابي):
+     - الحساب الموجود هنا باسم المستخدم نفسه يبقى بمعرّفه المحلي وبكلمة مروره هنا، ويُستبدل معرّفه الوارد في كل النسخة
+       (التقييمات والفرق والسجل…)، فلا يتكرر الحساب؛ والاسم المكرر داخل النسخة نفسها يُدمج في حساب واحد.
+     - من يستورد يبقى مديراً نشطاً. ونسخة البرنامج السحابي لا تحمل كلمات المرور، فيبدأ فيها الحساب الجديد بكلمة 123456 مع إلزامه بتغييرها */
   async function offlinePayload(text) {
-    const d = JSON.parse(text); if (!d || d.format !== 'sijil-alada-cloud') return text;
-    for (const k of ['format', 'scope', 'version', 'credentials', 'logins', 'counters', 'exportedAt']) delete d[k];
-    /* حساب موجود هنا باسم المستخدم نفسه يبقى بمعرّفه المحلي، ويُستبدل معرّفه السحابي في كل النسخة (التقييمات والفرق والسجل…)، فلا يتكرر الحساب */
-    const remap = new Map(), seen = new Set(), norm = x => String(x || '').trim().toLowerCase();
+    const d = JSON.parse(text); if (!d || typeof d !== 'object' || Array.isArray(d)) return text;
+    const cloud = d.format === 'sijil-alada-cloud';
+    if (cloud) for (const k of ['format', 'scope', 'version', 'credentials', 'logins', 'counters', 'exportedAt']) delete d[k];
+    const remap = new Map(), chosen = new Map(), drop = new Set(), norm = x => String(x || '').trim().toLowerCase();
     for (const u of Array.isArray(d.users) ? d.users : []) {
-      if (!u || typeof u !== 'object') continue; const name = norm(u.username);
-      if (seen.has(name)) throw new Error('النسخة تتضمن اسم المستخدم «' + u.username + '» أكثر من مرة، فلم يُستورد شيء.'); seen.add(name);
+      if (!u || typeof u !== 'object') continue; const name = norm(u.username); if (!name) continue;
+      if (chosen.has(name)) { if (u.id !== chosen.get(name)) remap.set(u.id, chosen.get(name)); drop.add(u); continue; }
       const cur = byId('users', u.id) || list('users').find(x => norm(x.username) === name);
+      chosen.set(name, cur ? cur.id : u.id);
       if (cur && cur.id !== u.id) { remap.set(u.id, cur.id); u.username = cur.username; }
-      if (cur && cur.hash) Object.assign(u, { salt: cur.salt, hash: cur.hash, mustChange: !!cur.mustChange }); else { u.salt = uid(); u.hash = await EV.hashPassword('123456', u.salt); u.mustChange = true; }
+      if (cur && cur.hash) Object.assign(u, { salt: cur.salt, hash: cur.hash, mustChange: !!cur.mustChange });
+      else if (cloud || !u.hash || !u.salt) { u.salt = uid(); u.hash = await EV.hashPassword('123456', u.salt); u.mustChange = true; }
       if (cur && cur.id === st.user.id) Object.assign(u, { role: cur.role, active: true });
-      delete u.lastLoginAt;
+      if (cloud) delete u.lastLoginAt;
     }
+    if (drop.size) d.users = d.users.filter(u => !drop.has(u));
     const fix = v => Array.isArray(v) ? v.map(fix) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [remap.get(k) || k, fix(x)])) : typeof v === 'string' && remap.has(v) ? remap.get(v) : v;
     if (remap.size) for (const k of Object.keys(d)) d[k] = fix(d[k]);
     return JSON.stringify(d);

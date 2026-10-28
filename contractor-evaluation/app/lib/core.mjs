@@ -36,6 +36,7 @@ const E = {
   deleted: () => new HttpError(409, 'حذف مستخدم آخر هذا السجل بعد أن فتحته، فلم يُحفظ تعديلك. اضغط «⟳ تحديث».', 'conflict', { current: null, deleted: true }),
   exists: () => new HttpError(409, 'يوجد ملف بالمسار نفسه. أعد إرفاق الملف.', 'exists'),
   staleInputs: () => new HttpError(409, 'تغيّرت التقييمات المقدَّمة منذ فتحت الصفحة، فلم تُحفظ النتيجة. حدّث البيانات ثم أعد التوحيد.', 'stale_inputs'),
+  returnedOut: () => new HttpError(409, 'في الدورة تقييم أُعيد إلى صاحبه ولم يُقدَّم بعد. تُوحَّد النتيجة وتُعتمد بعد أن يقدّمه من جديد، أو بعد استبعاده مع ذكر السبب.', 'returned_pending'),
   busy: () => new HttpError(503, 'الخادم مشغول حالياً، أعد المحاولة بعد لحظات.', 'busy'),
   config: m => new HttpError(503, m || 'الخادم غير مهيأ بعد.', 'not_configured'),
   limited: () => new HttpError(429, 'محاولات دخول خاطئة كثيرة. انتظر ربع ساعة ثم أعد المحاولة.', 'rate_limited'),
@@ -371,16 +372,19 @@ export class Server {
   staleConsolidation(doc, cy) {
     const c = cy.consolidated; const excl = new Set(cy.excluded || []);
     const cur = doc.data.evaluations.filter(e => e.cycleId === cy.id && e.status === 'submitted' && !excl.has(e.id));
-    const got = Array.isArray(c.evaluationIds) ? c.evaluationIds.slice().sort() : null; const inputs = isObj(c.inputs) ? c.inputs : {};
+    const got = Array.isArray(c.evaluationIds) ? c.evaluationIds.slice().sort() : null; const legacy = !isObj(c.inputs);
     const method = cy.method || 'mean', w = o => Object.keys(isObj(o) ? o : {}).sort().map(k => [k, o[k]]);
-    if ((c.method || 'mean') !== method || (method === 'weighted' && !same(w(c.evalWeights), w(cy.evalWeights)))) return true;
-    return !got || !same(cur.map(e => e.id).sort(), got) || (c.count != null && c.count !== cur.length) || cur.some(e => inputs[e.id] !== (e.updatedAt || null));
+    if ((c.method || 'mean') !== method || (!legacy && method === 'weighted' && !same(w(c.evalWeights), w(cy.evalWeights)))) return true;
+    if (!got || !same(cur.map(e => e.id).sort(), got) || (c.count != null && c.count !== cur.length)) return true;
+    /* توحيد من إصدار سابق لا يحمل بصمة التقييمات: قديم إن عُدّل أحد تقييماته بعد وقت التوحيد */
+    if (legacy) return typeof c.at !== 'string' || cur.some(e => typeof e.updatedAt === 'string' && e.updatedAt > c.at);
+    return cur.some(e => (Object.hasOwn(c.inputs, e.id) ? c.inputs[e.id] : undefined) !== (e.updatedAt || null));
   }
-  /* دورة المرفق (من سجله أو من تقييمه) ومدى قفلها */
+  /* المرفق مقفل إن كانت دورته أو دورة تقييمه معتمدة أو مقفلة */
   attLock(doc, a) {
     const ev = a.evaluationId ? doc.data.evaluations.find(e => e.id === a.evaluationId) : null;
-    const cy = doc.data.cycles.find(c => c.id === (a.cycleId || (ev && ev.cycleId)));
-    return { ev, locked: !!cy && (cy.status === 'approved' || cy.status === 'closed') };
+    const locked = [a.cycleId, ev && ev.cycleId].some(id => { const cy = id && doc.data.cycles.find(c => c.id === id); return !!cy && (cy.status === 'approved' || cy.status === 'closed'); });
+    return { ev, locked };
   }
   onTeam(doc, user, contractId) { const k = doc.data.contracts.find(c => c.id === contractId); return !!k && (k.leadEngineer === user.id || (k.evaluators || []).includes(user.id)); }
 
@@ -422,7 +426,12 @@ export class Server {
         /* النتيجة الموحدة تُحسب من التقييمات المقدَّمة الحالية غير المستبعدة كلها، وبصيغتها الحالية (وقت آخر تعديل لكل تقييم):
            تُفحص عند التوحيد وعند الاعتماد، فلا يُحفظ ولا يُعتمد توحيد قديم (بعد إعادة تقييم وتقديمه مثلاً) */
         const entering = s => rec.status === s && (!prev || prev.status !== s);
-        if (rec.consolidated && (!same(prev ? prev.consolidated : null, rec.consolidated) || entering('approved')) && this.staleConsolidation(doc, rec)) throw E.staleInputs();
+        if (entering('approved') && !rec.consolidated) throw E.bad('لا تُعتمد الدورة قبل توحيد نتيجتها.');
+        if (rec.consolidated && (!same(prev ? prev.consolidated : null, rec.consolidated) || entering('approved'))) {
+          const excl = new Set(rec.excluded || []);
+          if (doc.data.evaluations.some(e => e.cycleId === rec.id && e.status === 'returned' && !excl.has(e.id))) throw E.returnedOut();
+          if (this.staleConsolidation(doc, rec)) throw E.staleInputs();
+        }
         if (entering('closed') && me.role !== 'admin') throw E.forbid('إقفال الدورة دون اعتماد لمدير النظام فقط.');
         if (!prev) {
           if (r < 2) {
@@ -474,6 +483,8 @@ export class Server {
         return;
       }
       case 'attachments': {
+        if (rec.cycleId != null) { const cy = doc.data.cycles.find(c => c.id === rec.cycleId); if (!cy || cy.contractId !== rec.contractId) throw E.bad('دورة المرفق لا تتبع عقده.'); }
+        if (rec.evaluationId != null) { const e = doc.data.evaluations.find(x => x.id === rec.evaluationId); if (!e || e.contractId !== rec.contractId) throw E.bad('التقييم لا يتبع هذا العقد.'); if (rec.cycleId != null && rec.cycleId !== e.cycleId) throw E.bad('التقييم لا يتبع دورة المرفق.'); }
         if (me.role !== 'admin' && (this.attLock(doc, rec).locked || (prev && this.attLock(doc, prev).locked))) throw E.forbid('مستندات الدورة المعتمدة مقفلة.');
         if (prev) {
           if (r < 2) throw E.forbid();
@@ -596,7 +607,7 @@ export class Server {
   /* التحقق من طلب حفظ قبل إدخاله الطابور */
   putItem(x) {
     if (!isObj(x) || !COLLS.includes(x.coll)) throw E.bad('مجموعة غير معروفة.');
-    if (!isObj(x.rec) || typeof x.rec.id !== 'string' || !ID_RE.test(x.rec.id)) throw E.bad('سجل غير صالح.');
+    if (!isObj(x.rec) || typeof x.rec.id !== 'string' || !ID_RE.test(x.rec.id) || PROTO_KEYS.has(x.rec.id)) throw E.bad('سجل غير صالح.');
     if (Buffer.byteLength(JSON.stringify(x.rec)) > LIMITS.record) throw E.large('السجل أكبر من الحد المسموح.');
     const rec = sanitize(x.coll, x.rec); checkRecord(x.coll, rec);
     return { coll: x.coll, rec, base: typeof x.base === 'string' ? x.base : null, audit: x.audit };
@@ -727,7 +738,7 @@ export class Server {
     const P = b.payload; if (!isObj(P)) throw E.bad('ملف النسخة غير صالح.');
     const fromCloud = P.format === 'sijil-alada-cloud' && P.scope === 'full';
     if (P.format === 'sijil-alada-cloud' && P.scope !== 'full') throw E.bad('هذه نسخة مستخدم وليست نسخة كاملة؛ صدّر النسخة من حساب مدير النظام.');
-    const problems = []; const valid = (coll, r0) => { try { if (!isObj(r0) || typeof r0.id !== 'string' || !ID_RE.test(r0.id) || Buffer.byteLength(JSON.stringify(r0)) > LIMITS.record) throw E.bad('سجل غير صالح.'); checkRecord(coll, coll === 'users' ? sanitize('users', r0) : r0); return true; } catch (e) { if (problems.length < 20) problems.push(coll + ' ' + String(isObj(r0) ? r0.id : '?').slice(0, 40) + ': ' + (e instanceof HttpError ? e.message : 'غير صالح')); return false; } };
+    const problems = []; const valid = (coll, r0) => { try { if (!isObj(r0) || typeof r0.id !== 'string' || !ID_RE.test(r0.id) || PROTO_KEYS.has(r0.id) || Buffer.byteLength(JSON.stringify(r0)) > LIMITS.record) throw E.bad('سجل غير صالح.'); checkRecord(coll, coll === 'users' ? sanitize('users', r0) : r0); return true; } catch (e) { if (problems.length < 20) problems.push(coll + ' ' + String(isObj(r0) ? r0.id : '?').slice(0, 40) + ': ' + (e instanceof HttpError ? e.message : 'غير صالح')); return false; } };
     const incoming = Array.isArray(P.users) ? P.users.filter(u => isObj(u) && USER_RE.test(String(u.username || '').trim()) && valid('users', u)) : [];
     const names = new Map(); for (const u of incoming) { const k = lc(String(u.username).trim()); if (names.has(k)) throw E.bad('اسم مستخدم مكرر في النسخة: ' + u.username); names.set(k, u); }
     const temps = new Map(); for (const u of incoming) temps.set(u.id, tempPassword());
@@ -748,7 +759,7 @@ export class Server {
         if (lc(u.username) === lc(me.username)) { u.role = 'admin'; u.active = true; }                 // مدير النظام الذي يستورد يبقى مديراً نشطاً
         plan.push({ iu, u, target: byId || byName || null });
       }
-      const remap = {}; for (const p of plan) if (p.target && p.target.id !== p.u.id) remap[p.target.id] = p.u.id;
+      const remap = Object.create(null); for (const p of plan) if (p.target && p.target.id !== p.u.id) remap[p.target.id] = p.u.id;
       report.counts = {}; report.tempPasswords = []; report.skipped = (Array.isArray(P.users) ? P.users.length : 0) - incoming.length; meNewId = remap[me.id] || null;
       for (const p of plan) {
         const { iu, u, target } = p; const oldSec = target ? doc.secrets[target.id] : null;
@@ -816,7 +827,7 @@ export class Server {
         return { user, att };
       };
       /* القرار على ذاكرة النسخة أولاً، فإن رُفض الطلب أُعيد على أحدث نسخة (مرفق أُضيف للتو من نسخة أخرى مثلاً) */
-      let a = await this.authed(req), d;
+      let a = m === 'DELETE' ? await this.freshAuthed(req) : await this.authed(req), d;
       try { d = decide(a); } catch (e) { if (!(e instanceof HttpError) || a.fresh) throw e; a = await this.freshAuthed(req); d = decide(a); }
       const { user, att } = d;
       if (m === 'GET') {

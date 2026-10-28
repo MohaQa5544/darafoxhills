@@ -189,9 +189,11 @@ window.EV = (function () {
   const sortKeys = o => Object.keys(o || {}).sort().map(k => [k, o[k]]);
   function consolidationStale(cy) {
     const c = cy && cy.consolidated; if (!c) return false; if (!Array.isArray(c.evaluationIds)) return true; const excl = new Set(cy.excluded || []);
-    const cur = list('evaluations', e => e.cycleId === cy.id && e.status === 'submitted' && !excl.has(e.id)); const inp = c.inputs || {};
-    const method = cy.method || 'mean'; if ((c.method || 'mean') !== method || (method === 'weighted' && JSON.stringify(sortKeys(c.evalWeights)) !== JSON.stringify(sortKeys(cy.evalWeights)))) return true;
-    return c.evaluationIds.slice().sort().join(',') !== cur.map(e => e.id).sort().join(',') || cur.some(e => inp[e.id] !== (e.updatedAt || null));
+    const cur = list('evaluations', e => e.cycleId === cy.id && e.status === 'submitted' && !excl.has(e.id)); const legacy = !c.inputs || typeof c.inputs !== 'object';
+    const method = cy.method || 'mean'; if ((c.method || 'mean') !== method || (!legacy && method === 'weighted' && JSON.stringify(sortKeys(c.evalWeights)) !== JSON.stringify(sortKeys(cy.evalWeights)))) return true;
+    if (c.evaluationIds.slice().sort().join(',') !== cur.map(e => e.id).sort().join(',') || (c.count != null && c.count !== cur.length)) return true;
+    if (legacy) return typeof c.at !== 'string' || cur.some(e => typeof e.updatedAt === 'string' && e.updatedAt > c.at);   // توحيد من إصدار سابق بلا بصمة
+    return cur.some(e => (Object.prototype.hasOwnProperty.call(c.inputs, e.id) ? c.inputs[e.id] : undefined) !== (e.updatedAt || null));
   }
   function companyScores(companyId) {
     const rows = [];
@@ -208,12 +210,15 @@ window.EV = (function () {
 
   /* ---------- الواجهة ---------- */
   function toast(msg, type) { const t = $('#toast'); const el = document.createElement('div'); el.className = 'toast ' + (type || 'info'); el.textContent = msg; t.appendChild(el); setTimeout(() => el.classList.add('show'), 10); setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 3600); }
+  let uiAt = 0;                                                                      // آخر إغلاق لنافذة (يستعمله حارس النقرات)
   function modal(opts) {
     return new Promise(resolve => {
-      const base = $('#modal'); let m = base;
-      if (!base.hidden) { m = document.getElementById('modal2'); if (!m) { m = document.createElement('div'); m.id = 'modal2'; m.hidden = true; document.body.appendChild(m); } }
+      let m = $('#modal'), n = 1;
+      while (m && !m.hidden) { n++; m = document.getElementById('modal' + n); }
+      if (!m) { m = document.createElement('div'); m.id = 'modal' + n; m.className = 'modal-layer'; m.style.zIndex = String(50 + 10 * n); m.hidden = true; document.body.appendChild(m); }
       m.hidden = false; m.innerHTML = `<div class="modal-box ${opts.wide ? 'wide' : ''}" role="dialog" aria-modal="true"><div class="modal-head"><h3>${esc(opts.title || '')}</h3><button class="icon-btn" data-m="cancel" aria-label="إغلاق">✕</button></div><div class="modal-body">${opts.body || ''}</div><div class="modal-foot">${opts.hideOk ? '' : `<button class="btn primary" data-m="ok">${esc(opts.okText || 'موافق')}</button>`}${opts.hideCancel ? '' : `<button class="btn" data-m="cancel">${esc(opts.cancelText || 'إلغاء')}</button>`}</div></div>`;
-      const done = v => { m.hidden = true; m.innerHTML = ''; resolve(v); };
+      const done = v => { m.hidden = true; m.innerHTML = ''; uiAt = Date.now(); resolve(v); };
+      m.onsubmit = e => { e.preventDefault(); const ok = m.querySelector('[data-m="ok"]'); if (ok && !ok.disabled) ok.click(); };
       let busy = false;
       m.onclick = async e => { const b = e.target.closest('[data-m]'); if (!b) { if (e.target === m && !busy) done(false); return; } if (busy) return;
         if (b.dataset.m === 'ok') { if (opts.onOk) { busy = true; b.disabled = true; let r; try { r = await opts.onOk(m); } catch (err) { console.error(err); busy = false; b.disabled = false; toast('خطأ: ' + err.message, 'bad'); if (err.status === 409 || err.status === 403) { done(false); resync(err); } return; } busy = false; b.disabled = false; if (r === false) return; done(r === undefined ? true : r); } else done(true); } else done(false); };
@@ -295,8 +300,10 @@ window.EV = (function () {
   function resync(err) { if (isCloud() && state.user && err && (err.status === 409 || err.status === 403)) setTimeout(() => reload().catch(() => { }), 600); }
   function bind() {
     /* زر يعمل لا يُنفَّذ مرة ثانية حتى ينتهي (النقر المزدوج على «إصدار الخطاب» كان يصدر خطابين) */
-    const running = new Map();   // إجراء جارٍ على الهدف نفسه (حتى لو أُعيد رسم زره) لا يُبدأ مرة ثانية؛ ويسقط القيد بعد 20 ثانية احتياطاً
-    document.addEventListener('click', e => { const el = e.target.closest('[data-act]'); if (!el || el.disabled) return; const fn = actions[el.dataset.act]; if (!fn) return; e.preventDefault(); const key = JSON.stringify(el.dataset); const t0 = running.get(key); if (t0 && Date.now() - t0 < 20000) return; running.set(key, Date.now()); let p; try { p = fn(el, e); } catch (err) { p = Promise.reject(err); } Promise.resolve(p).catch(err => { console.error(err); toast('خطأ: ' + err.message, 'bad'); resync(err); }).finally(() => { running.delete(key); }); });
+    /* إجراء جارٍ على الهدف نفسه (حتى لو أُعيد رسم زره) لا يُبدأ مرة ثانية، ولا لحظة انتهائه (نقرة مزدوجة خلف إجراء انتهى فوراً)؛
+       والقيد يسقط احتياطاً بعد دقيقة من النقر أو من إغلاق آخر نافذة */
+    const running = new Map();
+    document.addEventListener('click', e => { const el = e.target.closest('[data-act]'); if (!el || el.disabled) return; const fn = actions[el.dataset.act]; if (!fn) return; e.preventDefault(); const key = JSON.stringify(el.dataset); const cur = running.get(key); if (cur && Date.now() - Math.max(cur.t, uiAt) < 60000) return; const run = { t: Date.now() }; running.set(key, run); let p; try { p = fn(el, e); } catch (err) { p = Promise.reject(err); } Promise.resolve(p).catch(err => { console.error(err); toast('خطأ: ' + err.message, 'bad'); resync(err); }).finally(() => setTimeout(() => { if (running.get(key) === run) running.delete(key); }, 400)); });
     document.addEventListener('submit', e => { const f = e.target.closest('form[data-form]'); if (!f) return; e.preventDefault(); const fn = forms[f.dataset.form]; if (fn) Promise.resolve(fn(f, formData(f))).catch(err => { console.error(err); toast('خطأ: ' + err.message, 'bad'); resync(err); }); });
     document.addEventListener('change', e => { const el = e.target.closest('[data-change]'); if (!el) return; if (el.dataset.change === 'orientation') { setOrientation(el.value); return; } const fn = actions['change:' + el.dataset.change]; if (fn) Promise.resolve(fn(el, e)).catch(err => { toast('خطأ: ' + err.message, 'bad'); resync(err); }); });
     document.addEventListener('input', e => { const el = e.target.closest('[data-input]'); if (!el) return; const fn = actions['input:' + el.dataset.input]; if (fn) fn(el, e); });

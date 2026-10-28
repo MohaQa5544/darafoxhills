@@ -67,14 +67,19 @@ const bigFile = { name: 'ملف كبير.bin', mimeType: 'application/octet-stre
     await page.fill(':nth-match(.item, 1) textarea.note-in', 'ملاحظة تُحفظ عند المغادرة'); await page.click('.eval-head a[href^="#/contract/"]'); await page.waitForTimeout(1500);
     const saved = await page.evaluate(async () => { const r = await window.EV.state.store.call('load'); const e = r.data.evaluations.find(x => x.evaluatorId === r.me); return !!e && Object.values(e.scores || {}).some(s => s && s.n === 'ملاحظة تُحفظ عند المغادرة'); }); if (!saved) throw new Error('مغادرة شاشة التقييم لم تحفظ التعديل المعلّق');
     await page.goBack(); await page.waitForSelector('.eval-layout'); await page.click('.eval-head [data-act="submitEval"]'); await page.waitForSelector('#modal'); await modalOk(); await page.waitForSelector('table.compare'); await page.click('[data-act="consolidate"]'); await page.waitForSelector('#modal #mf'); await modalOk(); await page.waitForSelector('text=بانتظار الاعتماد'); await snap('03-compare'); });
-  await step('تقييم أُعيد وقُدّم بعد التوحيد: التوحيد القديم لا يُعتمد، ويُعاد التوحيد', async () => {
+  await step('تقييم أُعيد بعد التوحيد: لا يُوحَّد دونه، ويظهر لصاحبه في مستحقاته، والتوحيد القديم لا يُعتمد ثم يُعاد', async () => {
     const ids = await page.evaluate(() => { const EV = window.EV; const a = EV.state.data.users.find(u => u.username === 'admin'); const e = EV.state.data.evaluations.find(x => x.evaluatorId === a.id); return { ev: e.id, cy: e.cycleId }; });
     await page.click(`[data-act="returnEval"][data-id="${ids.ev}"]`); await page.waitForSelector('#modal #mf'); await page.fill('#mf textarea[name=note]', 'راجع البند الأول'); await modalOk(); await page.waitForSelector('text=النتيجة الموحدة أدناه قديمة');
+    if (!/لم يُقدَّم بعد/.test(await page.textContent('#main'))) throw new Error('التنبيه لا يذكر التقييم المُعاد');
+    await page.click('[data-act="consolidate"]'); await page.waitForTimeout(1200);
+    if (await page.$('#modal:not([hidden]) #mf')) throw new Error('فُتح التوحيد والتقييم ما زال عند صاحبه'); if (!/لم يُقدَّم بعد/.test(await toastText())) throw new Error('لا رسالة رفض: ' + await toastText());
+    const cyUrl = page.url(); await page.goto(URL + '#/home'); await page.waitForSelector('.follow'); if (!/أُعيد للمراجعة/.test(await page.textContent('.follow'))) throw new Error('لوحة المتابعة لا تذكر التقييم المُعاد'); await page.goto(cyUrl); await page.waitForSelector('table.compare');
     const ctxB = await newCtx(); const pB = await ctxB.newPage(); watch(pB, 'B'); await pB.goto(URL); await login('admin', 'Admin#2026', pB); await pB.waitForSelector('.kpis');
-    await pB.goto(URL + '#/eval/' + ids.ev); await pB.waitForSelector('.eval-layout'); await pB.click('.eval-head [data-act="submitEval"]'); await pB.waitForSelector('#modal'); await modalOk(pB); await pB.waitForSelector('table.compare');
+    await pB.waitForSelector(`[data-act="startEval"][data-cycle="${ids.cy}"]`); await pB.click(`[data-act="startEval"][data-cycle="${ids.cy}"]`); await pB.waitForSelector('.eval-layout'); await pB.click('.eval-head [data-act="submitEval"]'); await pB.waitForSelector('#modal'); await modalOk(pB); await pB.waitForSelector('table.compare');
     if (!(await pB.$('text=النتيجة الموحدة أدناه قديمة')) || await pB.$('[data-act="approveCycle"]')) throw new Error('التوحيد القديم معروض للاعتماد بعد إعادة التقديم');
     const r = await pB.evaluate(async id => { const EV = window.EV; try { await EV.update('cycles', EV.byId('cycles', id), c => { Object.assign(c, { status: 'approved', approvedBy: EV.state.user.id, approvedAt: EV.nowISO(), consequence: 'improvement' }); }, 'cycle_approve'); return 'approved'; } catch (e) { return e.status + ' ' + e.message; } }, ids.cy);
-    if (!/^409/.test(r)) throw new Error('الخادم قبل اعتماد توحيد قديم: ' + r); await ctxB.close();
+    if (!/^409/.test(r)) throw new Error('الخادم قبل اعتماد توحيد قديم: ' + r);
+    await pB.goto(URL + '#/report/cycle/' + ids.cy); await pB.waitForSelector('.sheet.report'); if (!/نسخة غير صالحة للاعتماد/.test(await pB.textContent('.sheet.report'))) throw new Error('تقرير التوحيد القديم بلا تنبيه'); await ctxB.close();
     await page.click('[data-act="reload"]'); await page.waitForTimeout(800); await page.click('[data-act="consolidate"]'); await page.waitForSelector('#modal #mf'); await modalOk(); await page.waitForSelector('text=بانتظار الاعتماد');
     if (await page.$('text=النتيجة الموحدة أدناه قديمة')) throw new Error('بقي تنبيه التوحيد القديم بعد إعادة التوحيد');
   });
@@ -155,6 +160,15 @@ const bigFile = { name: 'ملف كبير.bin', mimeType: 'application/octet-stre
     await login('admin', 'Admin#2026'); await page.waitForTimeout(2500);
     const kept = (await serverData()).evaluations.some(e => Object.values(e.scores || {}).some(x => x && x.n === 'ملاحظة كُتبت بعد انتهاء الجلسة')); if (!kept) throw new Error('ضاع ما كُتب قبل إعادة الدخول');
   });
+  await step('تعديل كُتب قبل أن يكشف رفعُ مرفق انتهاء الجلسة يُحفظ بعد الدخول مجدداً', async () => {
+    const evId = await page.evaluate(() => { const EV = window.EV; const cy = EV.state.data.cycles.find(c => c.label === 'دورة الحفظ'); return EV.state.data.evaluations.find(e => e.cycleId === cy.id && e.evaluatorId === EV.state.user.id).id; });
+    await page.goto(URL + '#/eval/' + evId); await page.waitForSelector('.eval-layout');
+    quiet = true; await page.evaluate(() => { window.EV.state.store.token = 'expired.token'; });
+    await page.fill(':nth-match(.item, 2) textarea.note-in', 'ملاحظة قبل رفع المرفق'); await page.setInputFiles(':nth-match(.item, 2) input[type=file]', pngFile);
+    await page.waitForSelector('#login-user', { timeout: 8000 }); await page.waitForTimeout(6500); quiet = false;
+    await login('admin', 'Admin#2026'); await page.waitForTimeout(2500);
+    const kept = (await serverData()).evaluations.some(e => Object.values(e.scores || {}).some(x => x && x.n === 'ملاحظة قبل رفع المرفق')); if (!kept) throw new Error('ضاع التعديل الذي كُتب قبل انتهاء الجلسة');
+  });
   await step('الخروج مع التخلي عن تعديل لم يُحفظ لا يرسله لاحقاً باسم من يدخل بعده', async () => {
     const evId = await page.evaluate(() => { const EV = window.EV; const cy = EV.state.data.cycles.find(c => c.label === 'دورة الحفظ'); return EV.state.data.evaluations.find(e => e.cycleId === cy.id && e.evaluatorId === EV.state.user.id).id; });
     await page.goto(URL + '#/eval/' + evId); await page.waitForSelector('.eval-layout');
@@ -183,6 +197,13 @@ const bigFile = { name: 'ملف كبير.bin', mimeType: 'application/octet-stre
     if (await page.evaluate(() => window.__inner) !== false) throw new Error('لم تُلغَ النافذة الثانية');
     if (await page.evaluate(() => document.getElementById('modal').hidden)) throw new Error('أُغلقت الأولى مع الثانية');
     await page.click('#modal [data-m="ok"]'); if (await page.evaluate(() => window.__outer) !== true) throw new Error('الأولى لم تعمل بعد إغلاق الثانية');
+    const before = page.url();
+    await page.evaluate(() => { window.__enter = window.EV.modal({ title: 'سبب', body: '<form id="mf"><input name="why" required></form>', onOk: m => m.querySelector('#mf').why.value }); });
+    await page.waitForSelector('#modal #mf input[name=why]'); await page.fill('#modal #mf input[name=why]', 'سبب مكتوب'); await page.press('#modal #mf input[name=why]', 'Enter');
+    if (await page.evaluate(() => window.__enter) !== 'سبب مكتوب') throw new Error('Enter لم يؤكد النافذة'); if (page.url() !== before) throw new Error('أعاد Enter تحميل الصفحة: ' + page.url());
+    const g = await page.evaluate(async () => { const EV = window.EV; let runs = 0, release = null; EV.actions.__probe = () => { runs++; return new Promise(r => { release = r; }); }; const b = document.createElement('button'); b.dataset.act = '__probe'; document.body.appendChild(b);
+      b.click(); b.click(); const during = runs; release(); await new Promise(r => setTimeout(r, 50)); b.click(); const justAfter = runs; await new Promise(r => setTimeout(r, 500)); b.click(); const later = runs; release(); b.remove(); delete EV.actions.__probe; return { during, justAfter, later }; });
+    if (g.during !== 1 || g.justAfter !== 1 || g.later !== 2) throw new Error('حارس النقرات: ' + JSON.stringify(g));
     const n0 = (await serverData()).letters.length;
     const same = await page.evaluate(async id => { const EV = window.EV; const k = EV.byId('contracts', id); const [a, b] = await Promise.all([EV.makeLetter('notice', k), EV.makeLetter('notice', k)]); return a.id === b.id; }, K2);
     const n1 = (await serverData()).letters.length; if (!same || n1 !== n0 + 1) throw new Error('صدر ' + (n1 - n0) + ' خطاب');

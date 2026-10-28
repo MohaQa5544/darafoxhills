@@ -5,7 +5,7 @@
   let cur = null, saveTimer = null;
   const attsOf = e => list('attachments', a => a.evaluationId === e.id);
   const attachedKeys = e => new Set(attsOf(e).map(a => a.itemKey).filter(Boolean));
-  const canEdit = e => e.evaluatorId === st.user.id && (e.status === 'draft' || e.status === 'returned');
+  const canEdit = e => { const cy = byId('cycles', e.cycleId); return e.evaluatorId === st.user.id && (e.status === 'draft' || e.status === 'returned') && !(cy && (cy.status === 'approved' || cy.status === 'closed')); };
   const canView = (e, cy) => { if (e.evaluatorId === st.user.id || EV.canViewAll()) return true; if (e.status !== 'submitted') return false; const v = st.settings.visibility; if (v === 'managers') return false; if (v === 'always') return true; return list('evaluations', x => x.cycleId === cy.id && x.evaluatorId === st.user.id && x.status === 'submitted').length > 0; };
 
   function chips(it, sc, editable) {
@@ -57,7 +57,8 @@
     saving = (async () => {
       for (const rec of [...dirty]) {
         dirty.delete(rec); const sig = sigOf(rec);
-        if (!st.user || rec.evaluatorId !== st.user.id || savedSig.get(rec) === sig) continue;
+        if (!st.user) { held.add(rec); continue; }                               // انتهت الجلسة: يُحفظ بعد الدخول مجدداً بالحساب نفسه
+        if (rec.evaluatorId !== st.user.id || savedSig.get(rec) === sig) continue;
         try { await EV.save('evaluations', rec, null); savedSig.set(rec, sig); retries = 0; }
         catch (err) {
           const transient = err.network || err.status === 429 || err.status >= 500;
