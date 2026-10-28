@@ -9,7 +9,7 @@ export function fsStore(root, opts = {}) {
   const file = p => { if (p.includes('..')) throw new Error('bad path'); return path.join(root, ...p.split('/')); };
   const etagOf = buf => '"' + createHash('sha1').update(buf).digest('hex') + '"';
   const wait = () => (opts.latency ? new Promise(r => setTimeout(r, opts.latency)) : null);
-  const stats = { read: 0, write: 0, del: 0, copy: 0 };
+  const stats = { read: 0, write: 0, del: 0, copy: 0, list: 0 };
   return {
     ready: true, stats,
     async read(p, o = {}) {
@@ -23,7 +23,7 @@ export function fsStore(root, opts = {}) {
       stats.write++; await wait();
       return withLock(async () => {
         const f = file(p); let cur = null; try { cur = await fs.readFile(f); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-        if (o.create && cur) throw new Error('This blob already exists');
+        if (o.create && cur) { const e = new Error('This blob already exists'); e.code = 'exists'; throw e; }
         if (o.ifMatch && (!cur || etagOf(cur) !== o.ifMatch)) { const e = new Error('precondition'); e.code = 'precondition'; throw e; }
         await fs.mkdir(path.dirname(f), { recursive: true }); const tmp = f + '.tmp' + process.pid + Math.random().toString(36).slice(2);
         const buf = Buffer.isBuffer(body) ? body : Buffer.from(body); await fs.writeFile(tmp, buf); await fs.rename(tmp, f);
@@ -33,5 +33,10 @@ export function fsStore(root, opts = {}) {
     },
     async del(p) { stats.del++; for (const x of [file(p), file(p) + '.ct']) { try { await fs.unlink(x); } catch (e) { } } },
     async copy(a, b) { stats.copy++; const buf = await fs.readFile(file(a)); await fs.mkdir(path.dirname(file(b)), { recursive: true }); await fs.writeFile(file(b), buf); },
+    async list(prefix) {
+      stats.list++; await wait(); const out = [];
+      const walk = async (dir, rel) => { let ents = []; try { ents = await fs.readdir(dir, { withFileTypes: true }); } catch (e) { return; } for (const d of ents) { const r = rel ? rel + '/' + d.name : d.name; if (d.isDirectory()) await walk(path.join(dir, d.name), r); else if (!/\.ct$|\.tmp\d/.test(d.name) && r.startsWith(prefix)) { const st = await fs.stat(path.join(dir, d.name)); out.push({ path: r, size: st.size, uploadedAt: st.mtime }); } } };
+      await walk(root, ''); return out.sort((x, y) => (x.path < y.path ? -1 : 1));
+    },
   };
 }

@@ -1,6 +1,7 @@
 /* خادم تطوير واختبار محلي: يقدّم ملفات app/ كما يقدّمها Vercel (مع رؤوس vercel.json) ويوجّه /api/* إلى منطق الخادم نفسه
    مع محرك تخزين محلي. الاستخدام:
-   node dev/server.mjs --port 8787 --data /tmp/ev-data --seed dev/seed.example.json [--instances 2] [--latency 20] [--reset] */
+   node dev/server.mjs --port 8787 --data /tmp/ev-data --seed dev/seed.example.json [--instances 2] [--latency 20] [--reset]
+   [--audit-keep N] [--cache-ms N] [--write-limit N] [--upload-limit N] [--prefix ev-test/] */
 import http from 'node:http';
 import { readFileSync, promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -15,12 +16,16 @@ const arg = (k, d) => { const i = process.argv.indexOf('--' + k); return i > 0 ?
 const port = Number(arg('port', 8787)), dataDir = path.resolve(String(arg('data', path.join(here, '.data')))), instances = Number(arg('instances', 1)), latency = Number(arg('latency', 0));
 if (arg('reset', false)) await fs.rm(dataDir, { recursive: true, force: true });
 if (arg('audit-keep', false)) { LIMITS.auditKeep = Number(arg('audit-keep')); LIMITS.auditChunk = Math.max(1, Math.floor(LIMITS.auditKeep / 2)); }
+if (arg('cache-ms', false)) LIMITS.cacheMs = Number(arg('cache-ms'));
+if (arg('write-limit', false)) LIMITS.writesPer5Min = Number(arg('write-limit'));
+if (arg('upload-limit', false)) LIMITS.uploadsPer10Min = Number(arg('upload-limit'));
 await fs.mkdir(dataDir, { recursive: true });
 const seedFile = arg('seed', path.join(here, 'seed.example.json'));
 const seed = []; for (const s of JSON.parse(readFileSync(seedFile, 'utf8'))) { const h = await hashPassword(s.password); const x = Object.assign({}, s, h); delete x.password; seed.push(x); }
 const store = fsStore(dataDir, { latency }); const bank = loadBank(readFileSync(path.join(appDir, 'bank.js'), 'utf8'));
 const secret = process.env.SESSION_SECRET || randomBytes(32).toString('hex');
-const servers = Array.from({ length: instances }, () => new Server({ store, secret, seedUsers: seed, bank, log: (...a) => console.error('[server]', ...a) }));
+const prefix = String(arg('prefix', 'ev/'));
+const servers = Array.from({ length: instances }, () => new Server({ store, secret, seedUsers: seed, bank, prefix, log: (...a) => console.error('[server]', ...a) }));
 let rr = 0;
 const vj = JSON.parse(readFileSync(path.join(appDir, 'vercel.json'), 'utf8'));
 const toRe = src => new RegExp('^' + src.split('(.*)').map(x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('(.*)') + '$');

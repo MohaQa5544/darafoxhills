@@ -1,15 +1,16 @@
 // اختبارات واجهة الخادم السحابي: الدخول، الصلاحيات، حجب تقييمات الزملاء، التعارض، التزامن بين نسختين، المرفقات، الاستيراد
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtempSync, readdirSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url)); const root = path.resolve(here, '..');
-const PORT = 8790; const BASE = `http://localhost:${PORT}/api/`;
+const PORT = Number(process.env.API_TEST_PORT || 8790); const BASE = `http://localhost:${PORT}/api/`;
 const dataDir = mkdtempSync(path.join(os.tmpdir(), 'ev-api-'));
-const srv = spawn(process.execPath, ['dev/server.mjs', '--port', String(PORT), '--data', dataDir, '--reset', '--instances', '2', '--audit-keep', '40'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+const srv = spawn(process.execPath, ['dev/server.mjs', '--port', String(PORT), '--data', dataDir, '--reset', '--instances', '2', '--audit-keep', '40', '--cache-ms', '2000'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
 let srvErr = ''; srv.stderr.on('data', d => { srvErr += d; });
 const stop = () => { try { srv.kill(); } catch (e) { } };
 process.on('exit', stop);
@@ -198,6 +199,125 @@ await t('import of an offline backup: kept passwords, default 123456 replaced, i
 await t('audit log rotates into archives and export still returns it all', async () => {
   const files = readdirSync(path.join(dataDir, 'ev', 'audit')).filter(f => f.endsWith('.gz')); ok(files.length >= 1, 'no audit archive');
   const e = JSON.parse((await rpc('export', {}, S.admin)).body.json); ok(e.audit.length > 40, 'export audit ' + e.audit.length);
+});
+await t('letters get server-assigned, unique reference numbers', async () => {
+  const mk = () => ({ id: randomUUID(), contractId: k1.id, type: 'notice', refNo: 'client-chosen', subject: 'إخطار', to: 'الشركة', bodyHtml: '<p>نص</p>', issuedAt: now(), issuedBy: U.head });
+  const recs = Array.from({ length: 10 }, mk);
+  const rs = await Promise.all(recs.map((r, i) => put(i % 2 ? 'head' : 'admin', 'letters', r)));
+  ok(rs.every(r => r.status === 200), 'statuses ' + rs.map(r => r.status).join(','));
+  const refs = rs.map(r => r.body.patch && r.body.patch.refNo); ok(refs.every(x => x && x !== 'client-chosen'), 'refs ' + refs.join(','));
+  eq(new Set(refs).size, refs.length, 'duplicate reference numbers'); ok(refs.every(x => x.includes(new Date().getFullYear() + '/')), 'year in ' + refs[0]);
+  const d = await load('head'); const l = d.letters.find(x => x.id === recs[0].id); eq(l.refNo, refs[0]);
+  const r2 = await put('head', 'letters', Object.assign({}, l, { subject: 'معدل', refNo: 'changed', updatedAt: now() }), l.updatedAt); eq(r2.status, 200); eq(r2.body.patch.refNo, refs[0], 'refNo kept on update');
+});
+await t('a save on a record someone deleted is refused instead of resurrecting it', async () => {
+  const p = { id: randomUUID(), name: 'مشروع للحذف', type: 'other' }; eq((await put('admin', 'projects', p)).status, 200);
+  const cur = (await load('head')).projects.find(x => x.id === p.id);
+  eq((await rpc('remove', { coll: 'projects', id: p.id }, S.admin)).status, 200);
+  const r = await put('head', 'projects', Object.assign({}, cur, { name: 'تعديل', updatedAt: now() }), cur.updatedAt); eq(r.status, 409); eq(r.body.deleted, true);
+  ok(!(await load('admin')).projects.some(x => x.id === p.id), 'record came back');
+});
+await t('a conflict tells the client which version is current', async () => {
+  const c = (await load('admin')).companies.find(x => x.id === comp.id);
+  const r = await put('head', 'companies', Object.assign({}, c, { contact_name: 'y', updatedAt: now() }), '2000-01-01T00:00:00.000Z'); eq(r.status, 409); eq(r.body.current, c.updatedAt);
+});
+await t('cycles: engineers open cycles with defaults only; malformed results are refused', async () => {
+  const base = () => ({ id: randomUUID(), contractId: k1.id, type: 'final', label: 'x', status: 'open', method: 'mean', excluded: [], evalWeights: {} });
+  for (const b of [{ extra: '<img src=x onerror=alert(1)>' }, { method: 'weighted' }, { excluded: [U.head] }, { consolidated: { total: 9, count: '<b>' } }, { status: 'approved' }, { type: 'nope' }, { label: 'x'.repeat(300) }])
+    eq((await put('eng1', 'cycles', Object.assign(base(), b))).status, 400, JSON.stringify(b).slice(0, 60));
+  const c = (await load('head')).cycles.find(x => x.id === cy1.id);
+  eq((await put('head', 'cycles', Object.assign({}, c, { consolidated: { total: 8, count: '<img src=x>' }, updatedAt: now() }), c.updatedAt)).status, 400, 'count');
+  eq((await put('head', 'cycles', Object.assign({}, c, { consolidated: { total: '<svg onload=1>' }, updatedAt: now() }), c.updatedAt)).status, 400, 'total');
+  eq((await put('head', 'cycles', Object.assign({}, c, { evalWeights: { [U.eng1]: 'heavy' }, updatedAt: now() }), c.updatedAt)).status, 400, 'weights');
+});
+await t('engineers outside the contract team cannot start evaluations there', async () => {
+  const cy = { id: randomUUID(), contractId: k2.id, type: 'final', label: 'دورة العقد الثاني', status: 'open', method: 'mean', excluded: [], evalWeights: {} }; eq((await put('head', 'cycles', cy)).status, 200);
+  eq((await put('eng1', 'evaluations', { id: randomUUID(), cycleId: cy.id, contractId: k2.id, evaluatorId: U.eng1, status: 'draft', scores: {} })).status, 403);
+  eq((await put('head', 'evaluations', { id: randomUUID(), cycleId: cy.id, contractId: k2.id, evaluatorId: U.head, status: 'draft', scores: {} })).status, 200, 'managers may evaluate any contract');
+});
+await t('uploads never overwrite an existing file', async () => {
+  eq(await upload(S.eng1, attPath(), Buffer.from('%PDF-1.4 replaced')), 409);
+  const a = await download(S.head, attPath()); ok(a.buf.toString().startsWith('%PDF-1.4\n% test'), 'content was replaced');
+});
+await t('removing an attachment record also deletes its file', async () => {
+  const p = `attachments/${k1.id}/beef0001__صورة.png`; eq(await upload(S.head, p, Buffer.from('png-bytes'), 'image/png'), 200);
+  const id = randomUUID(); eq((await put('head', 'attachments', { id, contractId: k1.id, path: p, name: 'صورة.png', size: 9, mime: 'image/png', uploadedBy: U.head })).status, 200);
+  eq((await download(S.head, p)).status, 200);
+  eq((await rpc('remove', { coll: 'attachments', id }, S.head)).status, 200);
+  eq((await download(S.head, p)).status, 404);
+});
+await t('removing something already gone writes nothing; the follow-up account is refused first', async () => {
+  const before = (await rpc('load', {}, S.admin)).body.rev;
+  eq((await rpc('remove', { coll: 'projects', id: randomUUID() }, S.admin)).status, 200);
+  eq((await rpc('load', {}, S.admin)).body.rev, before, 'rev changed');
+  eq((await rpc('remove', { coll: 'projects', id: randomUUID() }, S.sec)).status, 403);
+});
+await t('the browser can only add a logout entry to the audit log', async () => {
+  for (const action of ['user_create', 'approve', 'backup_import']) eq((await rpc('audit', { entry: { action, detail: { name: 'fake-entry' } } }, S.eng1)).status, 200);
+  eq((await rpc('audit', { entry: { action: 'logout' } }, S.eng1)).status, 200);
+  const e = JSON.parse((await rpc('export', {}, S.admin)).body.json);
+  ok(!e.audit.some(a => a.detail && a.detail.name === 'fake-entry'), 'forged entry accepted'); ok(e.audit.some(a => a.action === 'logout' && a.actor === U.eng1), 'logout missing');
+  ok(e.audit.some(a => a.action === 'backup_export'), 'export not audited');
+});
+await t('rpc accepts only JSON, plus gzip for an admin restore', async () => {
+  eq((await fetch(BASE + 'rpc', { method: 'POST', headers: { 'content-type': 'text/plain' }, body: JSON.stringify({ op: 'login', username: 'admin', password: 'x' }) })).status, 415);
+  const g = gzipSync(Buffer.from(JSON.stringify({ op: 'import', payload: { companies: [{ id: randomUUID(), name_ar: 'شركة من نسخة مضغوطة', roles: ['contractor'] }] } })));
+  const send = (body, token) => fetch(BASE + 'rpc', { method: 'POST', headers: Object.assign({ 'content-type': 'application/gzip' }, token ? { authorization: 'Bearer ' + token } : {}), body });
+  eq((await send(g)).status, 401); eq((await send(g, S.eng1)).status, 403);
+  const a = await send(g, S.admin); eq(a.status, 200); ok((await load('admin')).companies.some(c => c.name_ar === 'شركة من نسخة مضغوطة'), 'gzip import missing');
+  eq((await send(Buffer.from('not gzip'), S.admin)).status, 413);
+  const bomb = gzipSync(Buffer.alloc(70 * 1024 * 1024, 32)); ok(bomb.length < 4 * 1024 * 1024); eq((await send(bomb, S.admin)).status, 413, 'decompression bomb');
+});
+await t('imports that would break accounts are refused as a whole', async () => {
+  eq((await rpc('import', { payload: { users: [{ id: randomUUID(), username: 'dupe', name: 'a', role: 'engineer' }, { id: randomUUID(), username: 'DUPE', name: 'b', role: 'engineer' }] } }, S.admin)).status, 400, 'duplicate usernames');
+  const d = await load('admin'); const head = d.users.find(u => u.username === 'head');
+  eq((await rpc('import', { payload: { users: [{ id: head.id, username: 'eng1', name: 'x', role: 'engineer' }] } }, S.admin)).status, 400, 'id and username point to different accounts');
+  ok((await load('admin')).users.some(u => u.username === 'head' && u.role === 'section_head'), 'refused import changed data');
+  const demote = { users: d.users.filter(u => u.role === 'admin').map(u => Object.assign({}, u, { role: 'engineer', active: false })) };
+  eq((await rpc('import', { payload: demote }, S.admin)).status, 200);
+  const me = (await load('admin')).users.find(u => u.id === U.admin); eq(me.role, 'admin', 'importer demoted'); eq(me.active, true, 'importer disabled');
+  eq((await rpc('import', { payload: { companies: [{ id: 'x' }] } }, S.admin)).status, 200); ok(!(await load('admin')).companies.some(c => c.id === 'x'), 'invalid id imported');
+});
+await t('seed validation and address grouping', async () => {
+  const core = await import('../app/lib/core.mjs');
+  const good = Object.assign({ username: 'a1', name: 'a', role: 'admin' }, await core.hashPassword('Xx#12345'));
+  eq(core.seedProblem([good]), null);
+  for (const [bad, m] of [[[], 'empty'], [[Object.assign({}, good, { role: 'engineer' })], 'no admin'], [[good, Object.assign({}, good, { username: 'A1' })], 'duplicate'], [[Object.assign({}, good, { role: 'boss' })], 'role'], [[Object.assign({}, good, { hash: 'zz' })], 'hash'], [[{ username: 'a1', role: 'admin', password: 'plain' }], 'plaintext']]) ok(core.seedProblem(bad), m);
+  eq(core.ipKey(new Request('http://x', { headers: { 'x-real-ip': '2001:db8:1:2:3:4:5:6' } })), '2001:db8:1:2::/64');
+  eq(core.ipKey(new Request('http://x', { headers: { 'x-real-ip': '203.0.113.7' } })), '203.0.113.7');
+});
+await t('per-user write and upload limits (separate server with low limits)', async () => {
+  const P2 = PORT + 3; const B2 = `http://localhost:${P2}/api/`; const dir2 = mkdtempSync(path.join(os.tmpdir(), 'ev-api-lim-'));
+  const s2 = spawn(process.execPath, ['dev/server.mjs', '--port', String(P2), '--data', dir2, '--reset', '--write-limit', '5', '--upload-limit', '2'], { cwd: root, stdio: 'ignore' }); process.on('exit', () => { try { s2.kill(); } catch (e) { } });
+  try {
+    for (let i = 0; i < 50; i++) { try { const r = await fetch(B2 + 'health'); if (r.ok) break; } catch (e) { } await new Promise(r => setTimeout(r, 200)); }
+    const call = async (op, payload, token) => { const r = await fetch(B2 + 'rpc', { method: 'POST', headers: Object.assign({ 'content-type': 'application/json' }, token ? { authorization: 'Bearer ' + token } : {}), body: JSON.stringify(Object.assign({ op }, payload || {})) }); return { status: r.status, body: await r.json().catch(() => null) }; };
+    const l = await call('login', { username: 'admin', password: 'temp-admin1' }); const tok = (await call('password', { next: 'Admin#2026' }, l.body.token)).body.token;
+    const st = []; for (let i = 0; i < 6; i++) st.push((await call('put', { coll: 'projects', rec: { id: randomUUID(), name: 'p' + i, type: 'other', updatedAt: now() }, base: null }, tok)).status);
+    eq(st.join(','), '200,200,200,200,429,429', 'write limit');
+    const h = await call('login', { username: 'head', password: 'temp-head1' }); const ht = (await call('password', { next: 'Head#2026' }, h.body.token)).body.token;
+    const k = { id: randomUUID(), companyId: 'none', role: 'contractor', status: 'active', updatedAt: now() }; eq((await call('put', { coll: 'contracts', rec: k, base: null }, ht)).status, 200);
+    const up = async i => (await fetch(B2 + 'file?path=' + encodeURIComponent(`attachments/${k.id}/0000000${i}__f.txt`), { method: 'POST', headers: { authorization: 'Bearer ' + ht, 'content-type': 'text/plain' }, body: 'x' })).status;
+    eq([await up(1), await up(2), await up(3)].join(','), '200,200,429', 'upload limit');
+  } finally { s2.kill(); }
+});
+await t('server core: lost write replies, batched writes and rejected jobs', async () => {
+  const core = await import('../app/lib/core.mjs'); const { fsStore } = await import('../dev/fs-store.mjs'); const { loadBank } = await import('../app/lib/runtime.mjs');
+  const bank = loadBank(readFileSync(path.join(root, 'app', 'bank.js'), 'utf8'));
+  const base = fsStore(mkdtempSync(path.join(os.tmpdir(), 'ev-core-'))); let lose = 0;
+  const store = Object.assign({}, base, { async write(p, b, o) { const etag = await base.write(p, b, o); if (lose && p.endsWith('db.json.gz') && o && o.ifMatch) { lose--; const e = new Error('precondition'); e.code = 'precondition'; throw e; } return etag; } });
+  const seed = [Object.assign({ username: 'admin', name: 'a', role: 'admin' }, await core.hashPassword('temp-admin1'))];
+  const srv = new core.Server({ store, secret: 'x'.repeat(40), seedUsers: seed, bank });
+  eq((await srv.mutate(() => null)).rev, 1, 'create');
+  lose = 1; const r = await srv.mutate(d => { d.data.projects.push({ id: 'p-lost-reply' }); }); eq(r.rev, 2, 'write recognised as ours');
+  eq((await srv.readDoc(true)).doc.data.projects.filter(p => p.id === 'p-lost-reply').length, 1, 'applied once');
+  const [x, y] = await Promise.all([srv.mutate(d => { d.data.projects.push({ id: 'p-a' }); }), srv.mutate(d => { d.data.projects.push({ id: 'p-b' }); })]);
+  eq(x.rev, y.rev, 'same tick → one write'); eq(x.others, 1); eq(y.others, 1);
+  const n = await srv.mutate(() => core.NOOP); eq(n.rev, x.rev, 'no-op writes nothing');
+  const a = srv.mutate(d => { d.data.projects.push({ id: 'p-partial' }); throw new core.HttpError(400, 'no'); });
+  const b = srv.mutate(d => { d.data.projects.push({ id: 'p-ok' }); });
+  const [ra, rb] = await Promise.allSettled([a, b]); eq(ra.status, 'rejected'); eq(rb.status, 'fulfilled');
+  const ids = (await srv.readDoc(true)).doc.data.projects.map(p => p.id); ok(ids.includes('p-ok') && !ids.includes('p-partial'), ids.join(','));
 });
 await t('a restarted server reads the persisted state', async () => {
   stop(); await new Promise(r => setTimeout(r, 500));
