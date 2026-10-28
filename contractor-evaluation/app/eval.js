@@ -39,21 +39,68 @@
     refreshAxisScores();
   });
   function refreshAxisScores() { const { e, t, w, k, cy } = cur; const side = document.getElementById('eval-side'); if (side) side.innerHTML = panel(e, t, w, k, cy); e.computed.axes.forEach(a => { const el = document.getElementById('as_' + a.key); if (el) el.textContent = a.score == null ? '' : fmtNum(a.score) + ' / 10'; }); }
-  let pendingSave = false;
-  window.addEventListener('beforeunload', e => { if (pendingSave) { e.preventDefault(); e.returnValue = ''; } });
-  function scheduleSave(retry) { clearTimeout(saveTimer); pendingSave = true; const state = () => document.getElementById('save-state'); const el0 = state(); if (el0) el0.textContent = 'جارٍ الحفظ…'; const rec = cur.e; saveTimer = setTimeout(async () => { try { await EV.save('evaluations', rec, null); pendingSave = false; const el = state(); if (el) el.textContent = 'تم الحفظ ' + new Date().toLocaleTimeString('ar-QA-u-nu-latn', { hour: '2-digit', minute: '2-digit' }); } catch (err) { const el = state(); if (el) el.textContent = '⚠️ لم يُحفظ'; if (err.network && (retry || 0) < 5 && cur.e === rec) { EV.toast('تعذر الحفظ مؤقتاً، ستُعاد المحاولة تلقائياً', 'warn'); setTimeout(() => scheduleSave((retry || 0) + 1), 4000); } else { pendingSave = false; EV.toast('لم يُحفظ التقييم: ' + err.message, 'bad'); if (EV.isCloud() && (err.status === 409 || err.status === 403)) setTimeout(() => EV.reload().catch(() => { }), 800); } } }, retry ? 0 : (EV.isCloud() ? 1200 : 500)); }
+  /* الحفظ التلقائي. في السحابي تُجمع التعديلات المتتالية 5 ثوانٍ قبل إرسالها (توفيراً لعمليات التخزين)، وتُرسل فوراً عند مغادرة
+     الشاشة أو إخفاء الصفحة أو قبل التحديث والخروج؛ ولا يُرسل شيء إن لم يتغير التقييم منذ آخر حفظ.
+     الانقطاع وأخطاء الخادم المؤقتة تُعاد تلقائياً، والتعديلات المعلّقة تبقى لكل تقييم على حدة حتى تُحفظ. */
+  const dirty = new Set(), savedSig = new WeakMap(); let saving = null, retryTimer = null, retries = 0;
+  const sigOf = e => JSON.stringify(Object.assign({}, e, { updatedAt: 0, createdAt: 0, createdBy: 0 }));
+  const saveState = t => { const el = document.getElementById('save-state'); if (el) el.textContent = t; };
+  window.addEventListener('beforeunload', ev => { if (dirty.size || saving) { ev.preventDefault(); ev.returnValue = ''; } });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && dirty.size) flushSave(); });
+  window.addEventListener('pagehide', () => { if (dirty.size) flushSave(); });
+  window.addEventListener('hashchange', () => { if (dirty.size) flushSave(); });
+  function scheduleSave() { if (!cur) return; dirty.add(cur.e); clearTimeout(saveTimer); saveState('جارٍ الحفظ…'); saveTimer = setTimeout(flushSave, EV.isCloud() ? 5000 : 500); }
+  async function flushSave() {
+    clearTimeout(saveTimer); clearTimeout(retryTimer);
+    while (saving) await saving;
+    if (!dirty.size) return true;
+    saving = (async () => {
+      for (const rec of [...dirty]) {
+        dirty.delete(rec); const sig = sigOf(rec);
+        if (savedSig.get(rec) === sig) continue;
+        try { await EV.save('evaluations', rec, null); savedSig.set(rec, sig); retries = 0; }
+        catch (err) {
+          const transient = err.network || err.status === 429 || err.status >= 500;
+          if (transient && retries < 6) { retries++; dirty.add(rec); EV.toast('تعذر الحفظ مؤقتاً، ستُعاد المحاولة تلقائياً', 'warn'); clearTimeout(retryTimer); retryTimer = setTimeout(flushSave, err.status === 429 ? 30000 : 3000 * retries); }
+          else { retries = 0; EV.toast('لم يُحفظ التقييم: ' + err.message, 'bad'); if (EV.isCloud() && (err.status === 409 || err.status === 403)) setTimeout(() => EV.reload().catch(() => { }), 800); }
+        }
+      }
+      saveState(dirty.size ? '⚠️ لم يُحفظ بعد' : 'تم الحفظ ' + new Date().toLocaleTimeString('ar-QA-u-nu-latn', { hour: '2-digit', minute: '2-digit' }));
+    })();
+    try { await saving; } finally { saving = null; }
+    return !dirty.size;
+  }
+  EV.flushPending = flushSave;
   A.score = el => { const { e, t } = cur; if (!canEdit(e)) return; const key = el.dataset.item, v = el.dataset.val; const sc = e.scores[key] = e.scores[key] || {}; if (v === 'na') { sc.na = !sc.na; sc.s = null; } else { sc.na = false; sc.s = Number(v); } const it = t.axes.flatMap(a => a.items).find(i => i.key === key); const box = el.closest('.item'); const sel = box.querySelector('.chips'); sel.outerHTML = chips(it, sc, true).replace(/<div class="scale-hint"[\s\S]*$/, ''); const hint = box.querySelector('.scale-hint'); const nh = document.createElement('div'); nh.innerHTML = chips(it, sc, true); hint.replaceWith(nh.querySelector('.scale-hint')); refreshAxisScores(); scheduleSave(); };
   A['input:note'] = el => { const sc = cur.e.scores[el.dataset.item] = cur.e.scores[el.dataset.item] || {}; sc.n = el.value; el.style.height = 'auto'; el.style.height = (el.scrollHeight) + 'px'; refreshAxisScores(); scheduleSave(); };
   A['input:summary'] = el => { cur.e[el.dataset.f] = el.value; scheduleSave(); };
   A['change:summary'] = el => { cur.e[el.dataset.f] = el.value; scheduleSave(); };
-  A['change:attach'] = async el => { const { e, k, cy, t } = cur; const key = el.dataset.item; const ax = t.axes.find(a => a.items.some(i => i.key === key)); for (const f of el.files) { const safe = f.name.replace(/[\\/:*?"<>|]/g, '_'); const path = `attachments/${k.id}/${uid().slice(0, 8)}__${safe}`; try { await st.store.saveFile(path, f); await EV.save('attachments', { id: uid(), contractId: k.id, cycleId: cy.id, evaluationId: e.id, axisKey: ax ? ax.key : null, itemKey: key, path, name: f.name, size: f.size, mime: f.type, uploadedBy: st.user.id }, 'attachment_add'); } catch (err) { EV.toast(err.message, 'bad'); } } EV.toast('تم إرفاق الملفات', 'ok'); EV.render(); };
-  A.delAtt = async el => { const a = byId('attachments', el.dataset.id); if (!a) return; if (!(await EV.confirm('حذف المرفق؟'))) return; await st.store.deleteFile(a.path); await EV.remove('attachments', a.id); EV.render(); };
+  A['change:attach'] = async el => {
+    const { e, k, cy, t } = cur; const key = el.dataset.item; const ax = t.axes.find(a => a.items.some(i => i.key === key)); const files = [...el.files]; let n = 0;
+    for (const f of files) {
+      const path = `attachments/${k.id}/${uid().slice(0, 8)}__${EV.safeFileName(f.name)}`;
+      try { await st.store.saveFile(path, f); await EV.save('attachments', { id: uid(), contractId: k.id, cycleId: cy.id, evaluationId: e.id, axisKey: ax ? ax.key : null, itemKey: key, path, name: f.name, size: f.size, mime: f.type, uploadedBy: st.user.id }, 'attachment_add'); n++; }
+      catch (err) { EV.toast('لم يُرفق «' + f.name + '»: ' + err.message, 'bad'); if (err.status === 401) return; }
+    }
+    el.value = '';
+    if (n) EV.toast(n === 1 ? 'تم إرفاق الملف' : 'تم إرفاق ' + n + ' ملفات', 'ok');
+    EV.render();
+  };
+  /* في السحابي يحذف الخادم الملف مع سجله */
+  A.delAtt = async el => { const a = byId('attachments', el.dataset.id); if (!a) return; if (!(await EV.confirm('حذف المرفق؟'))) return; if (!EV.isCloud()) await st.store.deleteFile(a.path); await EV.remove('attachments', a.id); EV.render(); };
   A.submitEval = async () => {
     const { e, t, w, cy } = cur; const r = EV.compute(t, w, e.scores, st.settings, attachedKeys(e));
     if (!r.complete) return EV.toast(`بقي ${r.totalItems - r.answered} سؤالاً بلا درجة. أجب عنها أو اختر «غير منطبق».`, 'bad');
     if (r.missingEvidence.length) return EV.toast('الدرجات الطرفية (' + st.settings.evidenceLow + ' فأقل أو ' + st.settings.evidenceHigh + ' فأكثر) تحتاج ملاحظة أو مرفقاً: ' + r.missingEvidence.length + ' بند', 'bad');
     if (!e.recommendation) return EV.toast('اختر توصية المقيّم في الخلاصة', 'bad');
     const ok = await EV.modal({ title: 'تقديم التقييم', okText: 'تقديم نهائي', body: `<p>الدرجة الكلية <b>${fmtNum(r.total)}</b> من 10 — ${ratingBadge(r.rating)}</p>${r.critical ? '<div class="note bad">يوجد بند حاسم بدرجة 0، وسيُعرض التقييم كتقرير سلبي.</div>' : ''}<p class="muted">بعد التقديم لا يمكنك تعديل الدرجات إلا إذا أعاده إليك رئيس القسم.</p>` });
-    if (!ok) return; e.computed = r; e.status = 'submitted'; e.submittedAt = EV.nowISO(); e.returnedNote = ''; await EV.save('evaluations', e, 'evaluation_submit'); EV.toast('تم تقديم التقييم', 'ok'); EV.navigate('#/cycle/' + cy.id);
+    if (!ok) return;
+    /* التقديم يحفظ التقييم كاملاً، فيُلغى الحفظ التلقائي المعلّق له؛ وإن فشل التقديم يعود التقييم مسودة كما كان */
+    clearTimeout(saveTimer); while (saving) await saving; dirty.delete(e);
+    const before = { computed: e.computed, status: e.status, submittedAt: e.submittedAt, returnedNote: e.returnedNote };
+    e.computed = r; e.status = 'submitted'; e.submittedAt = EV.nowISO(); e.returnedNote = '';
+    try { await EV.save('evaluations', e, 'evaluation_submit'); }
+    catch (err) { Object.keys(before).forEach(x => { if (before[x] === undefined) delete e[x]; else e[x] = before[x]; }); if (err.network || err.status >= 500) scheduleSave(); EV.render(); throw err; }
+    savedSig.set(e, sigOf(e)); EV.toast('تم تقديم التقييم', 'ok'); EV.navigate('#/cycle/' + cy.id);
   };
 })(window.EV);

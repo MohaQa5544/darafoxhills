@@ -61,6 +61,16 @@ window.EV = (function () {
   const isManager = () => rank() >= 2, isApprover = () => rank() >= 3, isAdmin = () => state.user && state.user.role === 'admin';
   const canEvaluate = () => !!state.user && state.user.role !== 'secretary';
   const canViewAll = () => isManager() || (!!state.user && state.user.role === 'secretary');
+  /* بدء تقييم لعقد: للمديرين، وللمهندس إن كان المسؤول عن العقد أو ضمن المقيّمين فيه (والخادم يفرض القاعدة نفسها) */
+  const onTeam = c => !!c && !!state.user && (c.leadEngineer === state.user.id || (c.evaluators || []).includes(state.user.id));
+  const canEvaluateContract = c => canEvaluate() && (isManager() || onTeam(c));
+  /* اسم ملف آمن للتخزين: بلا فواصل مسارات أو رموز ممنوعة أو نقاط متتالية، وبطول معقول مع الإبقاء على الامتداد */
+  function safeFileName(name) {
+    let s = String(name || '').normalize('NFC').replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, '_').replace(/\.{2,}/g, '.').replace(/^[.\s]+|[.\s]+$/g, '');
+    if (!s) s = 'file';
+    if (s.length > 150) { const m = /\.[A-Za-z0-9]{1,10}$/.exec(s); const ext = m ? m[0] : ''; s = s.slice(0, 150 - ext.length) + ext; }
+    return s;
+  }
   function can(what) { switch (what) { case 'evaluate': return canEvaluate(); case 'viewAll': return canViewAll(); case 'manage': return isManager(); case 'approve': return isApprover(); case 'admin': return isAdmin(); case 'templates': return isApprover(); case 'audit': return isApprover(); default: return !!state.user; } }
 
   /* ---------- البيانات ---------- */
@@ -105,7 +115,7 @@ window.EV = (function () {
     if ((await hashPassword(password, u.salt)) !== u.hash) throw new Error('كلمة المرور غير صحيحة');
     state.user = u; sessionStorage.setItem('ev_user', u.id); u.lastLoginAt = nowISO(); await save('users', u, null); await audit('login', 'users', u.id);
   }
-  function logout() { if (isCloud()) { state.store.logout(); applyData(state.store.data); } else audit('logout', 'users', state.user && state.user.id); state.user = null; sessionStorage.removeItem('ev_user'); navigate('#/login'); }
+  async function logout() { if (state.user) await flushPending(); if (isCloud()) { state.store.logout(); applyData(state.store.data); } else audit('logout', 'users', state.user && state.user.id); state.user = null; sessionStorage.removeItem('ev_user'); navigate('#/login'); }
   async function setPassword(user, pw, current) { if (isCloud()) { await state.store.changePassword(pw, current); user.mustChange = false; return; } user.salt = uid(); user.hash = await hashPassword(pw, user.salt); user.mustChange = false; await save('users', user, 'password_change'); }
 
   /* ---------- النماذج والاحتساب ---------- */
@@ -225,7 +235,9 @@ window.EV = (function () {
     if (state.store.token) { try { await state.store.load(); applyData(state.store.data); state.user = byId('users', state.store.me) || null; } catch (e) { if (e.status !== 401) toast(e.message, 'bad'); } }
     render();
   }
-  async function reload() { if (!state.store) return; if (isCloud()) { await state.store.load(); applyData(state.store.data); if (state.user) { const u = byId('users', state.user.id); if (!u || !u.active) return logout(); state.user = u; } render(); toast('تم تحديث البيانات'); return; } state.data = await state.store.load(); state.settings = Object.assign(clone(B.defaultSettings), state.data.settings); if (state.user) state.user = byId('users', state.user.id) || state.user; render(); toast('تم تحديث البيانات'); }
+  /* قبل إعادة التحميل يُحفظ أي تعديل معلّق (الحفظ التلقائي في شاشة التقييم)، فإن بقي ما لم يُحفظ بسبب انقطاع لا تُستبدل البيانات */
+  async function flushPending() { const f = window.EV && window.EV.flushPending; if (!f) return true; try { return (await f()) !== false; } catch (e) { return false; } }
+  async function reload() { if (!state.store) return; if (state.user && !(await flushPending())) { toast('لديك تعديلات لم تُحفظ بعد بسبب انقطاع الاتصال. ستُعاد محاولة حفظها تلقائياً، ثم حدّث البيانات.', 'warn'); return; } if (isCloud()) { await state.store.load(); applyData(state.store.data); if (state.user) { const u = byId('users', state.user.id); if (!u || !u.active) return logout(); state.user = u; } render(); toast('تم تحديث البيانات'); return; } state.data = await state.store.load(); state.settings = Object.assign(clone(B.defaultSettings), state.data.settings); if (state.user) state.user = byId('users', state.user.id) || state.user; render(); toast('تم تحديث البيانات'); }
 
   actions.pickFolder = async () => { try { const h = await S.pickFolder(); await useFolder(h); } catch (e) { if (e.name !== 'AbortError') toast('تعذر فتح المجلد: ' + e.message, 'bad'); } };
   actions.resumeFolder = async () => { const h = state.pendingHandle; if (!h) return; if (await S.ensurePermission(h, true)) await useFolder(h); else toast('لم يُمنح الإذن', 'warn'); };
@@ -263,5 +275,5 @@ window.EV = (function () {
     if (safe) window.open(obj, '_blank', 'noopener'); else { const a = document.createElement('a'); a.href = obj; a.download = name || path.split('/').pop().replace(/^([0-9a-f]{8}|notice)__/, ''); document.body.appendChild(a); a.click(); a.remove(); }
     setTimeout(() => URL.revokeObjectURL(obj), 120000);
   }
-  return { state, routes, actions, forms, route, navigate, render, page, printPage, setOrientation, boot, reload, useLocal, $, esc, safeHtml, uid, clone, nowISO, today, fmtDate, fmtDateTime, fmtNum, fmtMoney, addDays, sha256, hashPassword, can, isManager, isApprover, isAdmin, canEvaluate, canViewAll, byId, list, save, remove, audit, userName, companyName, projectName, login, logout, setPassword, isCloud, openStoredFile, activeTemplate, templateFor, weightsFor, ratingFor, compute, consolidate, companyScores, suggestedConsequence, isSmallContract, toast, modal, confirm, badge, ratingBadge, field, opts, formData, L, B, screens: {} };
+  return { state, routes, actions, forms, route, navigate, render, page, printPage, setOrientation, boot, reload, useLocal, $, esc, safeHtml, uid, clone, nowISO, today, fmtDate, fmtDateTime, fmtNum, fmtMoney, addDays, sha256, hashPassword, can, isManager, isApprover, isAdmin, canEvaluate, canEvaluateContract, canViewAll, safeFileName, byId, list, save, remove, audit, userName, companyName, projectName, login, logout, setPassword, isCloud, openStoredFile, activeTemplate, templateFor, weightsFor, ratingFor, compute, consolidate, companyScores, suggestedConsequence, isSmallContract, toast, modal, confirm, badge, ratingBadge, field, opts, formData, L, B, screens: {} };
 })();
