@@ -4,7 +4,7 @@ window.EV = (function () {
   const state = { user: null, store: null, data: null, settings: null, pendingHandle: null, printOrientation: 'portrait' };
   const routes = []; const actions = {}; const forms = {};
   const $ = s => document.querySelector(s);
-  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const esc = s => (s == null || typeof s === 'function' || (typeof s === 'object' && !Array.isArray(s)) ? '' : String(s)).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   /* تنقية HTML المخزّن في الخطابات: تبقى وسوم قوالب texts.js وmakeLetter وحدها (أضف هنا أي وسم جديد يُستخدم فيها) وسماتها الآمنة،
      وتُحذف العناصر النشطة بمحتواها، ويُفكّ أي وسم آخر ويبقى نصه، ولا تبقى أجزاء الجدول إلا داخل جدول حتى لا تخرج من خلية الورقة */
   const SAFE_TAGS = new Set(['p', 'br', 'b', 'strong', 'div', 'table', 'thead', 'tbody', 'tr', 'th', 'td']), SAFE_ATTRS = new Set(['class', 'dir', 'colspan', 'rowspan']);
@@ -27,10 +27,11 @@ window.EV = (function () {
   const clone = o => JSON.parse(JSON.stringify(o));
   const nowISO = () => new Date().toISOString();
   const today = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
-  const fmtDate = d => { if (!d) return '—'; try { return new Date(d).toLocaleDateString('ar-QA-u-nu-latn', { year: 'numeric', month: 'long', day: 'numeric' }); } catch (e) { return String(d).slice(0, 10); } };
-  const fmtDateTime = d => { if (!d) return '—'; try { return new Date(d).toLocaleString('ar-QA-u-nu-latn', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch (e) { return String(d); } };
-  const fmtNum = (n, dg = 1) => (n == null || n === '' || isNaN(n)) ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: dg, maximumFractionDigits: dg });
-  const fmtMoney = n => (n == null || n === '' || isNaN(n)) ? '—' : Number(n).toLocaleString('en-US') + ' ر.ق';
+  const okDate = d => (typeof d === 'string' || typeof d === 'number') && d !== '' && !isNaN(new Date(d));
+  const fmtDate = d => { if (!okDate(d)) return '—'; try { return new Date(d).toLocaleDateString('ar-QA-u-nu-latn', { year: 'numeric', month: 'long', day: 'numeric' }); } catch (e) { return String(d).slice(0, 10); } };
+  const fmtDateTime = d => { if (!okDate(d)) return '—'; try { return new Date(d).toLocaleString('ar-QA-u-nu-latn', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch (e) { return String(d); } };
+  const fmtNum = (n, dg = 1) => (n == null || n === '' || typeof n === 'object' || typeof n === 'function' || isNaN(n)) ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: dg, maximumFractionDigits: dg });
+  const fmtMoney = n => (n == null || n === '' || typeof n === 'object' || typeof n === 'function' || isNaN(n)) ? '—' : Number(n).toLocaleString('en-US') + ' ر.ق';
   const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
 
   /* ---------- SHA-256 (WebCrypto مع بديل JS) ---------- */
@@ -88,6 +89,24 @@ window.EV = (function () {
     }
     await state.store.put(coll, rec); if (action !== null) await audit(action || 'save', coll, rec.id, { name: recName(rec) }); return rec;
   }
+  /* تعديل سجل على نسخة منه: السجل الحي في الذاكرة لا يتغير إلا إذا قُبل الحفظ، فالفشل لا يترك حالة لم تُحفظ على الشاشة */
+  async function update(coll, rec, mutate, action) { const c = clone(rec); mutate(c); await save(coll, c, action); return c; }
+  /* عدة سجلات معاً ({ coll, rec, action }): في السحابي كتابة واحدة تُحفظ كلها أو لا شيء؛ في الأوفلاين بالتتابع */
+  async function saveMany(items) {
+    if (!state.store.putMany) { for (const x of items) await save(x.coll, x.rec, x.action); return items.map(x => x.rec); }
+    const at = nowISO(); const prev = items.map(x => [x.rec.updatedAt, x.rec.createdAt, x.rec.createdBy]);
+    const list2 = items.map((x, i) => { const base = prev[i][0] || null; x.rec.updatedAt = at; if (!x.rec.createdAt) x.rec.createdAt = at; if (!x.rec.createdBy && state.user) x.rec.createdBy = state.user.id; return { coll: x.coll, rec: x.rec, base, audit: x.action === null ? null : { action: x.action || 'save', detail: { name: recName(x.rec) } } }; });
+    try { await state.store.putMany(list2); }
+    catch (e) { items.forEach((x, i) => ['updatedAt', 'createdAt', 'createdBy'].forEach((k, j) => { if (prev[i][j] === undefined) delete x.rec[k]; else x.rec[k] = prev[i][j]; })); throw e; }
+    return items.map(x => x.rec);
+  }
+  /* أحدث البيانات من الخادم دون إعادة رسم (قبل التوحيد والاعتماد مثلاً) */
+  async function refreshData() { if (!isCloud()) return; await flushPending(); await state.store.load(); applyData(state.store.data); if (state.user) state.user = byId('users', state.user.id) || state.user; }
+  /* خلية CSV: نص يبدأ بـ = أو + أو - أو @ يُسبق بفاصلة عليا حتى لا تنفّذه برامج الجداول صيغةً */
+  const csvCell = v => { if (v == null) return '""'; if (typeof v === 'number') return String(v); let t = typeof v === 'object' ? '' : String(v); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return '"' + t.replace(/"/g, '""') + '"'; };
+  const csvText = rows => '\ufeff' + rows.map(r => r.map(csvCell).join(',')).join('\r\n');
+  /* موضوعات خطابات قديمة خُزّنت مُرمَّزة (&amp; &quot;) تُعاد نصاً عادياً قبل عرضها */
+  const unent = t => typeof t === 'string' && /&(amp|quot|lt|gt|#39);/.test(t) ? t.replace(/&(amp|quot|lt|gt|#39);/g, m => ({ '&amp;': '&', '&quot;': '"', '&lt;': '<', '&gt;': '>', '&#39;': "'" }[m])) : t;
   async function remove(coll, id) { const r = byId(coll, id); if (state.store.mode === 'cloud') { await state.store.remove(coll, id, { audit: { action: 'delete', detail: { name: recName(r) } } }); return; } await state.store.remove(coll, id); await audit('delete', coll, id, { name: recName(r) }); }
   const userName = id => { const u = byId('users', id); return u ? u.name : '—'; };
   const companyName = id => { const c = byId('companies', id); return c ? c.name_ar : '—'; };
@@ -108,14 +127,18 @@ window.EV = (function () {
   const isCloud = () => !!(state.store && state.store.mode === 'cloud');
   function applyData(d) { state.data = d; state.settings = Object.assign(clone(B.defaultSettings), d.settings); }
   async function login(username, password) {
-    if (isCloud()) { const r = await state.store.login(String(username || '').trim(), password); applyData(state.store.data); state.user = byId('users', r.me); if (!state.user) throw new Error('تعذر تحميل بيانات الحساب'); return; }
+    if (isCloud()) {
+      const r = await state.store.login(String(username || '').trim(), password); applyData(state.store.data); state.user = byId('users', r.me); if (!state.user) throw new Error('تعذر تحميل بيانات الحساب');
+      if (window.EV.resumeHeld) setTimeout(() => window.EV.resumeHeld(state.user.id), 0);   // ما لم يُحفظ قبل انتهاء الجلسة يُرسل الآن
+      return;
+    }
     const u = list('users').find(x => x.username.toLowerCase() === String(username || '').trim().toLowerCase());
     if (!u) throw new Error('اسم المستخدم غير موجود');
     if (!u.active) throw new Error('هذا الحساب معطَّل. راجع مدير النظام');
     if ((await hashPassword(password, u.salt)) !== u.hash) throw new Error('كلمة المرور غير صحيحة');
     state.user = u; sessionStorage.setItem('ev_user', u.id); u.lastLoginAt = nowISO(); await save('users', u, null); await audit('login', 'users', u.id);
   }
-  async function logout() { if (state.user) await flushPending(); if (isCloud()) { state.store.logout(); applyData(state.store.data); } else audit('logout', 'users', state.user && state.user.id); state.user = null; sessionStorage.removeItem('ev_user'); navigate('#/login'); }
+  async function logout(force) { if (state.user && !(await flushPending()) && force !== true && !(await confirm('توجد تعديلات لم تُحفظ بعد بسبب انقطاع الاتصال؛ الخروج الآن يفقدها. هل تريد الخروج؟', 'نعم، خروج'))) return; if (window.EV.dropHeld) window.EV.dropHeld(); if (isCloud()) { state.store.logout(); applyData(state.store.data); } else audit('logout', 'users', state.user && state.user.id); state.user = null; sessionStorage.removeItem('ev_user'); navigate('#/login'); }
   async function setPassword(user, pw, current) { if (isCloud()) { await state.store.changePassword(pw, current); user.mustChange = false; return; } user.salt = uid(); user.hash = await hashPassword(pw, user.salt); user.mustChange = false; await save('users', user, 'password_change'); }
 
   /* ---------- النماذج والاحتساب ---------- */
@@ -129,7 +152,7 @@ window.EV = (function () {
     for (const ax of template.axes) {
       const items = ax.items.filter(i => i.enabled !== false); let s = 0, wi = 0, axCrit = false; const rows = [];
       for (const it of items) {
-        totalItems++; const sc = scores[it.key] || {};
+        totalItems++; const sc = (Object.prototype.hasOwnProperty.call(scores, it.key) && scores[it.key]) || {};
         if (sc.na) { answered++; rows.push({ key: it.key, na: true, n: sc.n || '' }); continue; }
         if (sc.s == null || sc.s === '') { rows.push({ key: it.key, s: null, n: sc.n || '' }); continue; }
         answered++; const v = Number(sc.s), imp = Number(it.importance) || 1; s += v * imp; wi += imp;
@@ -237,12 +260,13 @@ window.EV = (function () {
   }
   /* قبل إعادة التحميل يُحفظ أي تعديل معلّق (الحفظ التلقائي في شاشة التقييم)، فإن بقي ما لم يُحفظ بسبب انقطاع لا تُستبدل البيانات */
   async function flushPending() { const f = window.EV && window.EV.flushPending; if (!f) return true; try { return (await f()) !== false; } catch (e) { return false; } }
-  async function reload() { if (!state.store) return; if (state.user && !(await flushPending())) { toast('لديك تعديلات لم تُحفظ بعد بسبب انقطاع الاتصال. ستُعاد محاولة حفظها تلقائياً، ثم حدّث البيانات.', 'warn'); return; } if (isCloud()) { await state.store.load(); applyData(state.store.data); if (state.user) { const u = byId('users', state.user.id); if (!u || !u.active) return logout(); state.user = u; } render(); toast('تم تحديث البيانات'); return; } state.data = await state.store.load(); state.settings = Object.assign(clone(B.defaultSettings), state.data.settings); if (state.user) state.user = byId('users', state.user.id) || state.user; render(); toast('تم تحديث البيانات'); }
+  async function reload() { if (!state.store) return; if (state.user && !(await flushPending())) { toast('لديك تعديلات لم تُحفظ بعد بسبب انقطاع الاتصال. ستُعاد محاولة حفظها تلقائياً، ثم حدّث البيانات.', 'warn'); return; } if (isCloud()) { await state.store.load(); applyData(state.store.data); if (state.user) { const u = byId('users', state.user.id); if (!u || !u.active) return logout(true); state.user = u; } render(); toast('تم تحديث البيانات'); return; } state.data = await state.store.load(); state.settings = Object.assign(clone(B.defaultSettings), state.data.settings); if (state.user) state.user = byId('users', state.user.id) || state.user; render(); toast('تم تحديث البيانات'); }
 
   actions.pickFolder = async () => { try { const h = await S.pickFolder(); await useFolder(h); } catch (e) { if (e.name !== 'AbortError') toast('تعذر فتح المجلد: ' + e.message, 'bad'); } };
   actions.resumeFolder = async () => { const h = state.pendingHandle; if (!h) return; if (await S.ensurePermission(h, true)) await useFolder(h); else toast('لم يُمنح الإذن', 'warn'); };
   actions.useLocal = () => useLocal();
   actions.reload = () => reload();
+  actions.retryBoot = () => location.reload();
   actions.logout = () => logout();
   actions.back = () => history.back();
   actions.print = () => window.print();
@@ -251,7 +275,8 @@ window.EV = (function () {
   /* بعد رفض الخادم لتعديل (تعارض أو صلاحية) تُعاد البيانات من الخادم حتى لا تبقى الشاشة على حالة لم تُحفظ */
   function resync(err) { if (isCloud() && state.user && err && (err.status === 409 || err.status === 403)) setTimeout(() => reload().catch(() => { }), 600); }
   function bind() {
-    document.addEventListener('click', e => { const el = e.target.closest('[data-act]'); if (!el || el.disabled) return; const fn = actions[el.dataset.act]; if (fn) { e.preventDefault(); Promise.resolve(fn(el, e)).catch(err => { console.error(err); toast('خطأ: ' + err.message, 'bad'); resync(err); }); } });
+    /* زر يعمل لا يُنفَّذ مرة ثانية حتى ينتهي (النقر المزدوج على «إصدار الخطاب» كان يصدر خطابين) */
+    document.addEventListener('click', e => { const el = e.target.closest('[data-act]'); if (!el || el.disabled || el.dataset.busy) return; const fn = actions[el.dataset.act]; if (fn) { e.preventDefault(); el.dataset.busy = '1'; let p; try { p = fn(el, e); } catch (err) { p = Promise.reject(err); } Promise.resolve(p).catch(err => { console.error(err); toast('خطأ: ' + err.message, 'bad'); resync(err); }).finally(() => { delete el.dataset.busy; }); } });
     document.addEventListener('submit', e => { const f = e.target.closest('form[data-form]'); if (!f) return; e.preventDefault(); const fn = forms[f.dataset.form]; if (fn) Promise.resolve(fn(f, formData(f))).catch(err => { console.error(err); toast('خطأ: ' + err.message, 'bad'); resync(err); }); });
     document.addEventListener('change', e => { const el = e.target.closest('[data-change]'); if (!el) return; if (el.dataset.change === 'orientation') { setOrientation(el.value); return; } const fn = actions['change:' + el.dataset.change]; if (fn) Promise.resolve(fn(el, e)).catch(err => { toast('خطأ: ' + err.message, 'bad'); resync(err); }); });
     document.addEventListener('input', e => { const el = e.target.closest('[data-input]'); if (!el) return; const fn = actions['input:' + el.dataset.input]; if (fn) fn(el, e); });
@@ -260,7 +285,11 @@ window.EV = (function () {
   }
   async function boot() {
     bind(); state.settings = clone(B.defaultSettings);
-    const cloud = await S.detectCloud(); if (cloud) { await useCloud(cloud); return; }
+    /* على رابط الإنترنت: انقطاع عابر لا يُسقط المستخدم إلى إعداد الأوفلاين؛ تُعاد المحاولة ثم تظهر شاشة «تعذر الوصول» */
+    let cloud = null; for (let i = 0; i < 3 && cloud === null; i++) { if (i) await new Promise(r => setTimeout(r, 1500 * i)); cloud = await S.detectCloud(); }
+    let seen = false; try { seen = localStorage.getItem('ev_cloud_seen') === '1'; } catch (e) { }
+    if (cloud) { try { localStorage.setItem('ev_cloud_seen', '1'); } catch (e) { } await useCloud(cloud); return; }
+    if (cloud === null || seen) { $('#app').innerHTML = `<div class="setup"><div class="setup-card"><h1>سجل الأداء</h1><div class="note warn">تعذر الوصول إلى الخادم. تحقق من اتصال الإنترنت ثم أعد المحاولة.</div><button class="btn primary big" data-act="retryBoot">⟳ إعادة المحاولة</button></div></div>`; return; }
     const mode = localStorage.getItem('ev_mode');
     if (S.supportsFolder() && mode !== 'local') { const h = await S.savedFolder(); if (h) { if (await S.ensurePermission(h, false)) { try { await useFolder(h); return; } catch (e) { console.warn(e); } } state.pendingHandle = h; } }
     if (mode === 'local') { await useLocal(); return; }
@@ -272,8 +301,8 @@ window.EV = (function () {
     const blob = await state.store.fileBlob(path); if (!blob) throw new Error('تعذر فتح الملف');
     const safe = /^(image\/(png|jpe?g|gif|webp|bmp)|application\/pdf|text\/plain)$/i.test(blob.type);
     const obj = URL.createObjectURL(new Blob([blob], { type: safe ? blob.type : 'application/octet-stream' }));
-    if (safe) window.open(obj, '_blank', 'noopener'); else { const a = document.createElement('a'); a.href = obj; a.download = name || path.split('/').pop().replace(/^([0-9a-f]{8}|notice)__/, ''); document.body.appendChild(a); a.click(); a.remove(); }
+    if (safe) window.open(obj, '_blank', 'noopener'); else { const a = document.createElement('a'); a.href = obj; a.download = name || path.split('/').pop().replace(/^(?:[0-9a-f]{8}__)?(?:notice__)?/, ''); document.body.appendChild(a); a.click(); a.remove(); }
     setTimeout(() => URL.revokeObjectURL(obj), 120000);
   }
-  return { state, routes, actions, forms, route, navigate, render, page, printPage, setOrientation, boot, reload, useLocal, $, esc, safeHtml, uid, clone, nowISO, today, fmtDate, fmtDateTime, fmtNum, fmtMoney, addDays, sha256, hashPassword, can, isManager, isApprover, isAdmin, canEvaluate, canEvaluateContract, canViewAll, safeFileName, byId, list, save, remove, audit, userName, companyName, projectName, login, logout, setPassword, isCloud, openStoredFile, activeTemplate, templateFor, weightsFor, ratingFor, compute, consolidate, companyScores, suggestedConsequence, isSmallContract, toast, modal, confirm, badge, ratingBadge, field, opts, formData, L, B, screens: {} };
+  return { state, routes, actions, forms, route, navigate, render, page, printPage, setOrientation, boot, reload, useLocal, $, esc, safeHtml, uid, clone, nowISO, today, fmtDate, fmtDateTime, fmtNum, fmtMoney, addDays, sha256, hashPassword, can, isManager, isApprover, isAdmin, canEvaluate, canEvaluateContract, canViewAll, safeFileName, byId, list, save, update, saveMany, refreshData, remove, audit, csvCell, csvText, unent, userName, companyName, projectName, login, logout, setPassword, isCloud, openStoredFile, activeTemplate, templateFor, weightsFor, ratingFor, compute, consolidate, companyScores, suggestedConsequence, isSmallContract, toast, modal, confirm, badge, ratingBadge, field, opts, formData, L, B, screens: {} };
 })();

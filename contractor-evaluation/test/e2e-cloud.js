@@ -19,8 +19,8 @@ const bigFile = { name: 'ملف كبير.bin', mimeType: 'application/octet-stre
   const browser = await chromium.launch();
   const newCtx = () => browser.newContext({ viewport: { width: 1360, height: 900 }, locale: 'ar-QA', acceptDownloads: true });
   const ctx = await newCtx(); const page = await ctx.newPage();
-  const errors = [];
-  const watch = (pg, tag) => { pg.on('pageerror', e => errors.push(tag + ' PAGEERROR: ' + e.message)); pg.on('console', m => { const t = m.text(); if (/Content Security Policy|Refused to/.test(t)) errors.push(tag + ' CSP: ' + t); else if (m.type() === 'error' && !/users\.local|fonts\.g|net::ERR|status of 40[0-9]|مستخدم آخر هذا السجل/.test(t)) errors.push(tag + ' CONSOLE: ' + t); }); pg.route('**/users.local.js', r => r.abort()); };
+  const errors = []; let quiet = false;                                       // quiet: خلال الأعطال المقصودة في الاختبار
+  const watch = (pg, tag) => { pg.on('pageerror', e => errors.push(tag + ' PAGEERROR: ' + e.message)); pg.on('console', m => { if (quiet) return; const t = m.text(); if (/Content Security Policy|Refused to/.test(t)) errors.push(tag + ' CSP: ' + t); else if (m.type() === 'error' && !/users\.local|fonts\.g|net::ERR|status of 40[0-9]|مستخدم آخر هذا السجل/.test(t)) errors.push(tag + ' CONSOLE: ' + t); }); pg.route('**/users.local.js', r => r.abort()); };
   watch(page, 'A');
   const snap = async (n, pg) => (pg || page).screenshot({ path: path.join(shots, n + '.png'), fullPage: true });
   const step = async (name, fn) => { try { await fn(); console.log('✔', name); } catch (e) { console.log('✘', name, '-', e.message.split('\n')[0]); await snap('FAIL_' + name.replace(/\W+/g, '_')).catch(() => { }); throw e; } };
@@ -117,6 +117,42 @@ const bigFile = { name: 'ملف كبير.bin', mimeType: 'application/octet-stre
     await visit('#/letter/' + ids.letter, '.sheet.letter', 'الخطاب');
     const l = await page.evaluate(() => ({ bad: !!document.querySelector('.sheet-body form, .sheet-body input, .sheet-body img, #pwn4, #pwn5'), text: document.querySelector('.sheet-body').textContent, br: !!document.querySelector('.sheet-body .to br') }));
     if (l.bad) throw new Error('بقي نموذج أو صورة في نص الخطاب'); if (!l.text.includes('نص سليم')) throw new Error('حُذف النص السليم من الخطاب'); if (!l.br) throw new Error('حُذف وسم سليم من سطر المرسل إليه');
+  });
+  const serverData = () => page.evaluate(async () => (await window.EV.state.store.call('load')).data);
+  const failPuts = (status, ops) => page.route('**/api/rpc', route => { let op = ''; try { op = JSON.parse(route.request().postData() || '{}').op; } catch (e) { } if ((ops || ['put', 'batch']).includes(op)) return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ error: 'عطل مقصود في الاختبار', code: 'test' }) }); return route.continue(); });
+  await step('إجراء رفضه الخادم لا يترك تغييراً في الشاشة', async () => {
+    await page.goto(URL + '#/settings/users'); await page.waitForSelector('[data-act="toggleUser"]');
+    const id = await page.evaluate(() => window.EV.state.data.users.find(u => u.username === 'neweng').id);
+    quiet = true; await failPuts(503); await page.click(`[data-act="toggleUser"][data-id="${id}"]`); await page.waitForTimeout(900); await page.unroute('**/api/rpc'); quiet = false;
+    if (await page.evaluate(id => window.EV.byId('users', id).active, id) !== true) throw new Error('تغيّر الحساب في الشاشة رغم فشل الحفظ');
+  });
+  let K2;
+  await step('النقر المزدوج على «إصدار الإخطار» يصدر خطاباً واحداً، والموضوع نص عادي', async () => {
+    K2 = await page.evaluate(async () => { const EV = window.EV; const k0 = EV.state.data.contracts[0]; const p = { id: EV.uid(), name: 'صيانة مسجد "النور" & ملحقاته', type: 'mosque' }; await EV.save('projects', p, 'project_create'); const k = { id: EV.uid(), companyId: k0.companyId, projectId: p.id, role: 'contractor', model: 'full', status: 'active', evaluators: [], leadEngineer: EV.state.user.id, weights: k0.weights, templateId: k0.templateId, contract_no: 'C-1&2' }; await EV.save('contracts', k, 'contract_create'); return k.id; });
+    const before = (await serverData()).letters.length;
+    await page.goto(URL + '#/contract/' + K2); await page.waitForSelector('[data-act="issueNotice"]'); await page.dblclick('[data-act="issueNotice"]'); await page.waitForSelector('.sheet.letter'); await page.waitForTimeout(900);
+    const after = (await serverData()).letters.length; if (after !== before + 1) throw new Error('صدر ' + (after - before) + ' خطاب');
+    const subj = await page.textContent('.subj'); if (/&quot;|&amp;/.test(subj) || !subj.includes('"النور" &')) throw new Error('موضوع الخطاب مرمّز مرتين: ' + subj);
+  });
+  await step('الحفظ التلقائي لا يقول «تم الحفظ» وهو لم يحفظ، ولا يضيع بانتهاء الجلسة', async () => {
+    await page.evaluate(async K2 => { const EV = window.EV; await EV.save('cycles', { id: EV.uid(), contractId: K2, type: 'interim', label: 'دورة الحفظ', status: 'open', method: 'mean', excluded: [], evalWeights: {} }, 'cycle_open'); }, K2);
+    await page.goto(URL + '#/contract/' + K2); await page.waitForSelector('[data-act="startEval"]'); await page.click('[data-act="startEval"]'); await page.waitForSelector('.eval-layout');
+    quiet = true; await failPuts(400, ['put']); await page.click(':nth-match(.item, 1) .chip[data-val="6"]'); const flushed = await page.evaluate(() => window.EV.flushPending()); await page.unroute('**/api/rpc'); quiet = false;
+    if (flushed !== false) throw new Error('flushPending أبلغ بالحفظ رغم الرفض'); if (!/لم يُحفظ/.test(await page.textContent('#save-state'))) throw new Error('حالة الحفظ: ' + await page.textContent('#save-state'));
+    if (await page.evaluate(() => window.EV.flushPending()) !== true) throw new Error('لم يُحفظ بعد عودة الخادم');
+    quiet = true; await page.evaluate(() => { window.EV.state.store.token = 'expired.token'; }); await page.fill(':nth-match(.item, 1) textarea.note-in', 'ملاحظة كُتبت بعد انتهاء الجلسة'); await page.evaluate(() => window.EV.flushPending()); await page.waitForSelector('#login-user', { timeout: 8000 }); quiet = false;
+    await login('admin', 'Admin#2026'); await page.waitForTimeout(2500);
+    const kept = (await serverData()).evaluations.some(e => Object.values(e.scores || {}).some(x => x && x.n === 'ملاحظة كُتبت بعد انتهاء الجلسة')); if (!kept) throw new Error('ضاع ما كُتب قبل إعادة الدخول');
+  });
+  await step('رابط الإنترنت لا يسقط إلى إعداد الأوفلاين إذا تعثر الاتصال', async () => {
+    const c3 = await newCtx(); const p3 = await c3.newPage(); watch(p3, 'H'); let n = 0; quiet = true;
+    await p3.route('**/api/health', r => (n++ === 0 ? r.abort() : r.continue())); await p3.goto(URL); await p3.waitForSelector('#login-user', { timeout: 15000 });
+    await p3.unroute('**/api/health'); await p3.route('**/api/health', r => r.abort()); await p3.reload(); await p3.waitForSelector('[data-act="retryBoot"]', { timeout: 15000 }); quiet = false;
+    if (await p3.$('[data-act="pickFolder"], [data-act="useLocal"]')) throw new Error('ظهر إعداد الأوفلاين'); await c3.close();
+  });
+  await step('أدوات العرض لا تتعطل بقيم غير متوقعة، وتصدير CSV لا يحمل صيغاً', async () => {
+    const r = await page.evaluate(() => { const EV = window.EV; return { d: EV.fmtDate({ a: 1 }), n: EV.fmtNum({ a: 1 }), e: EV.esc({ a: 1 }), csv: EV.csvText([['=1+1', '+2', 'نص', 5]]) }; });
+    if (r.d !== '—' || r.n !== '—' || r.e !== '') throw new Error('قيم غير متوقعة: ' + JSON.stringify(r)); if (!r.csv.includes(`"'=1+1"`) || !r.csv.includes(`"'+2"`) || !r.csv.includes(',5')) throw new Error('CSV: ' + r.csv);
   });
   await step('انتهاء الجلسة يعيد إلى شاشة الدخول', async () => { await page.evaluate(() => sessionStorage.setItem('ev_token', 'tampered.token')); await page.reload(); await page.waitForSelector('#login-user', { timeout: 8000 }); });
   await browser.close(); srv.kill();

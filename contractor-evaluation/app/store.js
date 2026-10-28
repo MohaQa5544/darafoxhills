@@ -17,17 +17,28 @@ window.EV_STORE = (function () {
     constructor() { this.mode = 'local'; this.key = 'ev_db_v1'; this.data = empty(); this.files = {}; }
     async init() { try { const raw = localStorage.getItem(this.key); if (raw) { const d = JSON.parse(raw); this.files = d.files || {}; delete d.files; this.data = Object.assign(empty(), d); } } catch (e) { console.warn(e); } return this; }
     async load() { return this.data; }
-    persist() { localStorage.setItem(this.key, JSON.stringify(Object.assign({}, this.data, { files: this.files }))); }
-    async put(coll, rec) { upsert(this.data[coll], rec); this.persist(); }
-    async remove(coll, id) { this.data[coll] = this.data[coll].filter(r => r.id !== id); this.persist(); }
-    async putSettings(s) { this.data.settings = s; this.persist(); }
-    async appendAudit(rec) { this.data.audit.push(rec); if (this.data.audit.length > 5000) this.data.audit.splice(0, this.data.audit.length - 5000); this.persist(); }
-    async saveFile(path, file) { if (file.size > 2 * 1024 * 1024) throw new Error('في وضع المتصفح يُسمح بملفات حتى 2 ميجابايت فقط. استخدم مجلد البيانات المشترك للملفات الأكبر.'); this.files[path] = { data: await toDataURL(file), name: file.name, type: file.type }; this.persist(); }
+    /* إن رفض المتصفح الحفظ (امتلاء المساحة) تُعاد الذاكرة كما كانت، فلا يظهر في الشاشة ما لم يُحفظ ولا تفشل الحفظات التالية */
+    persist() { try { localStorage.setItem(this.key, JSON.stringify(Object.assign({}, this.data, { files: this.files }))); } catch (e) { const err = new Error(/quota/i.test((e && (e.name + ' ' + e.message)) || '') ? 'امتلأت مساحة المتصفح المخصصة للبرنامج، فلم يُحفظ التعديل. احذف مرفقات كبيرة أو استخدم مجلد البيانات المشترك.' : 'تعذر الحفظ في المتصفح: ' + (e && e.message)); err.storage = true; throw err; } }
+    guarded(change, undo) { change(); try { this.persist(); } catch (e) { undo(); throw e; } }
+    async put(coll, rec) { const arr = this.data[coll], i = arr.findIndex(r => r.id === rec.id), old = arr[i]; this.guarded(() => upsert(arr, rec), () => { if (i >= 0) arr[i] = old; else arr.splice(arr.indexOf(rec), 1); }); }
+    async remove(coll, id) { const before = this.data[coll]; this.guarded(() => { this.data[coll] = before.filter(r => r.id !== id); }, () => { this.data[coll] = before; }); }
+    async putSettings(s) { const old = this.data.settings; this.guarded(() => { this.data.settings = s; }, () => { this.data.settings = old; }); }
+    async appendAudit(rec) { const a = this.data.audit; const trimmed = a.length >= 5000 ? a.slice(0, a.length - 4999) : []; this.guarded(() => { a.push(rec); if (trimmed.length) a.splice(0, trimmed.length); }, () => { a.pop(); if (trimmed.length) a.unshift(...trimmed); }); }
+    async saveFile(path, file) { if (file.size > 2 * 1024 * 1024) throw new Error('في وضع المتصفح يُسمح بملفات حتى 2 ميجابايت فقط. استخدم مجلد البيانات المشترك للملفات الأكبر.'); const f = { data: await toDataURL(file), name: file.name, type: file.type }; const old = this.files[path]; this.guarded(() => { this.files[path] = f; }, () => { if (old) this.files[path] = old; else delete this.files[path]; }); }
     async fileURL(path) { const f = this.files[path]; return f ? f.data : null; }
     async fileBlob(path) { const f = this.files[path]; if (!f) return null; const m = /^data:([^;,]*)(;base64)?,(.*)$/.exec(f.data || ''); if (!m) return null; const raw = m[2] ? atob(m[3]) : decodeURIComponent(m[3]); const u = new Uint8Array(raw.length); for (let i = 0; i < raw.length; i++) u[i] = raw.charCodeAt(i); return new Blob([u], { type: f.type || m[1] || 'application/octet-stream' }); }
-    async deleteFile(path) { delete this.files[path]; this.persist(); }
+    async deleteFile(path) { const old = this.files[path]; if (!old) return; this.guarded(() => { delete this.files[path]; }, () => { this.files[path] = old; }); }
     async exportAll() { return JSON.stringify(Object.assign({}, this.data, { files: this.files, exportedAt: new Date().toISOString() })); }
-    async importAll(json) { const d = JSON.parse(json); this.files = d.files || {}; delete d.files; delete d.exportedAt; this.data = Object.assign(empty(), d); this.persist(); }
+    /* الاستيراد دمج كما تقول رسالة التأكيد: السجل بالمعرّف نفسه يُستبدل، وما سواه يبقى */
+    async importAll(json) {
+      const d = JSON.parse(json); const snap = {}; for (const c of COLLS) snap[c] = this.data[c].slice(); const oldSettings = this.data.settings, oldAudit = this.data.audit.length, oldFiles = this.files;
+      this.guarded(() => {
+        for (const c of COLLS) for (const r of (Array.isArray(d[c]) ? d[c] : [])) if (r && r.id) upsert(this.data[c], r);
+        if (d.settings) this.data.settings = d.settings;
+        if (Array.isArray(d.audit)) { const have = new Set(this.data.audit.map(a => a.id)); for (const a of d.audit) if (a && a.id && !have.has(a.id)) this.data.audit.push(a); }
+        if (d.files && typeof d.files === 'object') this.files = Object.assign({}, this.files, d.files);
+      }, () => { for (const c of COLLS) this.data[c].splice(0, Infinity, ...snap[c]); this.data.settings = oldSettings; this.data.audit.length = oldAudit; this.files = oldFiles; });
+    }
     describe() { return 'المتصفح على هذا الجهاز (بيانات غير مشتركة)'; }
   }
 
@@ -109,15 +120,15 @@ window.EV_STORE = (function () {
     /* طلب انقطع رده (شبكة أو خطأ خادم) ربما وصل فعلاً. إن رد الخادم بتعارض نسخته الحالية هي ما أرسلناه نحن، فهو طلبنا: نكمل فوقه بدل إظهار تعارض وهمي. */
     noteUnacked(key, at, e) { if (at && e && (e.network || e.status >= 500)) { const s = this.unacked.get(key) || new Set(); s.add(at); this.unacked.set(key, s); } }
     putRecord(coll, rec, o) {
-      o = o || {};
+      o = o || {}; const snap = JSON.parse(JSON.stringify(rec));           // ما يُرسل هو السجل كما كان عند الحفظ، لا كما صار حين يحين دوره في الطابور
       return this.serial(async () => {
-        const key = coll + '/' + rec.id; const send = base => this.call('put', { coll, rec, base: base || null, audit: o.audit || null });
+        const key = coll + '/' + snap.id; const send = base => this.call('put', { coll, rec: snap, base: base || null, audit: o.audit || null });
         let r;
         try { r = await send(o.base); }
         catch (e) {
           const mine = this.unacked.get(key);
-          if (!(e.status === 409 && e.current && mine && mine.has(e.current))) { this.noteUnacked(key, rec.updatedAt, e); throw e; }
-          try { r = await send(e.current); } catch (e2) { this.noteUnacked(key, rec.updatedAt, e2); throw e2; }
+          if (!(e.status === 409 && e.current && mine && mine.has(e.current))) { this.noteUnacked(key, snap.updatedAt, e); throw e; }
+          try { r = await send(e.current); } catch (e2) { this.noteUnacked(key, snap.updatedAt, e2); throw e2; }
         }
         this.unacked.delete(key);
         if (r.patch && typeof r.patch === 'object') Object.assign(rec, r.patch);          // ما يحدده الخادم (رقم الخطاب مثلاً)
@@ -125,6 +136,15 @@ window.EV_STORE = (function () {
       });
     }
     put(coll, rec) { return this.putRecord(coll, rec, {}); }
+    /* عدة سجلات في كتابة واحدة على الخادم: تُحفظ كلها أو لا شيء */
+    putMany(items) {
+      const snaps = items.map(x => ({ coll: x.coll, rec: JSON.parse(JSON.stringify(x.rec)), base: x.base || null, audit: x.audit || null }));
+      return this.serial(async () => {
+        const r = await this.call('batch', { items: snaps });
+        items.forEach((x, i) => { const p = r.patches && r.patches[i]; if (p && typeof p === 'object') Object.assign(x.rec, p); upsert(this.data[x.coll], x.rec); });
+        this.track(r); return r;
+      });
+    }
     remove(coll, id, o) { o = o || {}; return this.serial(async () => { const r = await this.call('remove', { coll, id, audit: o.audit || null }); this.data[coll] = this.data[coll].filter(x => x.id !== id); this.track(r); return r; }); }
     putSettings(s) { return this.serial(async () => { const r = await this.call('settings', { settings: s }); this.data.settings = s; this.track(r); }); }
     appendAudit(rec) { if (rec.action !== 'logout') return Promise.resolve(); return this.serial(() => this.call('audit', { entry: { action: rec.action, entity: rec.entity, entityId: rec.entityId, detail: rec.detail } }).catch(() => { })); }
@@ -157,9 +177,17 @@ window.EV_STORE = (function () {
     describe() { return 'الخادم السحابي — بيانات مشتركة لكل الفريق'; }
   }
 
+  /* يعيد بيانات الخادم السحابي، أو false إن لم يوجد خادم يقيناً (فتح من ملف، أو 404، أو صفحة ليست JSON)، أو null إن تعذر الاتصال */
   async function detectCloud(base) {
     if (!/^https?:$/.test(location.protocol)) return false;
-    try { const ctl = typeof AbortController === 'function' ? new AbortController() : null; const t = setTimeout(() => { if (ctl) ctl.abort(); }, 6000); const res = await fetch((base || 'api/') + 'health', { cache: 'no-store', signal: ctl ? ctl.signal : undefined }); clearTimeout(t); if (!res.ok) return false; const j = await res.json(); return j && j.app === 'sijil-alada' ? j : false; } catch (e) { return false; }
+    try {
+      const ctl = typeof AbortController === 'function' ? new AbortController() : null; const t = setTimeout(() => { if (ctl) ctl.abort(); }, 6000);
+      const res = await fetch((base || 'api/') + 'health', { cache: 'no-store', signal: ctl ? ctl.signal : undefined }); clearTimeout(t);
+      if (res.status === 404 || res.status === 405) return false;
+      if (!res.ok) return null;
+      let j; try { j = await res.json(); } catch (e) { return false; }
+      return j && j.app === 'sijil-alada' ? j : false;
+    } catch (e) { return null; }
   }
 
   const supportsFolder = () => typeof window.showDirectoryPicker === 'function' && window.isSecureContext;

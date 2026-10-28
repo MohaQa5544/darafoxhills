@@ -42,10 +42,10 @@
   /* الحفظ التلقائي. في السحابي تُجمع التعديلات المتتالية 5 ثوانٍ قبل إرسالها (توفيراً لعمليات التخزين)، وتُرسل فوراً عند مغادرة
      الشاشة أو إخفاء الصفحة أو قبل التحديث والخروج؛ ولا يُرسل شيء إن لم يتغير التقييم منذ آخر حفظ.
      الانقطاع وأخطاء الخادم المؤقتة تُعاد تلقائياً، والتعديلات المعلّقة تبقى لكل تقييم على حدة حتى تُحفظ. */
-  const dirty = new Set(), savedSig = new WeakMap(); let saving = null, retryTimer = null, retries = 0;
+  const dirty = new Set(), held = new Set(), savedSig = new WeakMap(); let saving = null, retryTimer = null, retries = 0;
   const sigOf = e => JSON.stringify(Object.assign({}, e, { updatedAt: 0, createdAt: 0, createdBy: 0 }));
   const saveState = t => { const el = document.getElementById('save-state'); if (el) el.textContent = t; };
-  window.addEventListener('beforeunload', ev => { if (dirty.size || saving) { ev.preventDefault(); ev.returnValue = ''; } });
+  window.addEventListener('beforeunload', ev => { if (dirty.size || held.size || saving) { ev.preventDefault(); ev.returnValue = ''; } });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && dirty.size) flushSave(); });
   window.addEventListener('pagehide', () => { if (dirty.size) flushSave(); });
   window.addEventListener('hashchange', () => { if (dirty.size) flushSave(); });
@@ -61,18 +61,28 @@
         try { await EV.save('evaluations', rec, null); savedSig.set(rec, sig); retries = 0; }
         catch (err) {
           const transient = err.network || err.status === 429 || err.status >= 500;
-          if (transient && retries < 6) { retries++; dirty.add(rec); EV.toast('تعذر الحفظ مؤقتاً، ستُعاد المحاولة تلقائياً', 'warn'); clearTimeout(retryTimer); retryTimer = setTimeout(flushSave, err.status === 429 ? 30000 : 3000 * retries); }
-          else { retries = 0; EV.toast('لم يُحفظ التقييم: ' + err.message, 'bad'); if (EV.isCloud() && (err.status === 409 || err.status === 403)) setTimeout(() => EV.reload().catch(() => { }), 800); }
+          if (err.status === 401) { held.add(rec); EV.toast('انتهت الجلسة. سجّل الدخول مجدداً وسيُحفظ ما كتبته تلقائياً.', 'warn'); continue; }
+          if (err.status === 409 || err.status === 403) { retries = 0; EV.toast('لم يُحفظ التقييم: ' + err.message, 'bad'); if (EV.isCloud()) setTimeout(() => EV.reload().catch(() => { }), 800); continue; }   // تُعاد البيانات من الخادم
+          dirty.add(rec);                                                       // يبقى معلّقاً حتى يُحفظ: لا يُنسى ولا يُعرض «تم الحفظ»
+          if (transient && retries < 6) { retries++; EV.toast('تعذر الحفظ مؤقتاً، ستُعاد المحاولة تلقائياً', 'warn'); clearTimeout(retryTimer); retryTimer = setTimeout(flushSave, err.status === 429 ? 30000 : 3000 * retries); }
+          else { retries = 0; EV.toast('لم يُحفظ التقييم: ' + err.message + ' — سيُعاد إرساله مع تعديلك التالي.', 'bad'); }
         }
       }
-      saveState(dirty.size ? '⚠️ لم يُحفظ بعد' : 'تم الحفظ ' + new Date().toLocaleTimeString('ar-QA-u-nu-latn', { hour: '2-digit', minute: '2-digit' }));
+      saveState(dirty.size || held.size ? '⚠️ لم يُحفظ بعد' : 'تم الحفظ ' + new Date().toLocaleTimeString('ar-QA-u-nu-latn', { hour: '2-digit', minute: '2-digit' }));
     })();
     try { await saving; } finally { saving = null; }
-    return !dirty.size;
+    return !dirty.size && !held.size;
   }
   EV.flushPending = flushSave;
-  A.score = el => { const { e, t } = cur; if (!canEdit(e)) return; const key = el.dataset.item, v = el.dataset.val; const sc = e.scores[key] = e.scores[key] || {}; if (v === 'na') { sc.na = !sc.na; sc.s = null; } else { sc.na = false; sc.s = Number(v); } const it = t.axes.flatMap(a => a.items).find(i => i.key === key); const box = el.closest('.item'); const sel = box.querySelector('.chips'); sel.outerHTML = chips(it, sc, true).replace(/<div class="scale-hint"[\s\S]*$/, ''); const hint = box.querySelector('.scale-hint'); const nh = document.createElement('div'); nh.innerHTML = chips(it, sc, true); hint.replaceWith(nh.querySelector('.scale-hint')); refreshAxisScores(); scheduleSave(); };
-  A['input:note'] = el => { const sc = cur.e.scores[el.dataset.item] = cur.e.scores[el.dataset.item] || {}; sc.n = el.value; el.style.height = 'auto'; el.style.height = (el.scrollHeight) + 'px'; refreshAxisScores(); scheduleSave(); };
+  /* بعد إعادة الدخول بالحساب نفسه تُرسل التعديلات التي رُفضت لانتهاء الجلسة؛ والخادم يرفضها إن عدّل غيرك السجل في هذه الأثناء */
+  EV.resumeHeld = async userId => {
+    let n = 0; for (const rec of [...held]) { held.delete(rec); if (rec.evaluatorId === userId) { dirty.add(rec); n++; } }
+    if (!n) return; await flushSave(); EV.render();
+  };
+  EV.dropHeld = () => { held.clear(); };
+  const safeKey = k => typeof k === 'string' && /^[a-z][a-z0-9_]{0,40}$/.test(k);    // مفاتيح أسئلة آمنة فقط (لا __proto__ ونحوه)
+  A.score = el => { const { e, t } = cur; if (!canEdit(e)) return; const key = el.dataset.item, v = el.dataset.val; if (!safeKey(key)) return; const sc = e.scores[key] = e.scores[key] || {}; if (v === 'na') { sc.na = !sc.na; sc.s = null; } else { sc.na = false; sc.s = Number(v); } const it = t.axes.flatMap(a => a.items).find(i => i.key === key); const box = el.closest('.item'); const sel = box.querySelector('.chips'); sel.outerHTML = chips(it, sc, true).replace(/<div class="scale-hint"[\s\S]*$/, ''); const hint = box.querySelector('.scale-hint'); const nh = document.createElement('div'); nh.innerHTML = chips(it, sc, true); hint.replaceWith(nh.querySelector('.scale-hint')); refreshAxisScores(); scheduleSave(); };
+  A['input:note'] = el => { if (!safeKey(el.dataset.item)) return; const sc = cur.e.scores[el.dataset.item] = cur.e.scores[el.dataset.item] || {}; sc.n = el.value; el.style.height = 'auto'; el.style.height = (el.scrollHeight) + 'px'; refreshAxisScores(); scheduleSave(); };
   A['input:summary'] = el => { cur.e[el.dataset.f] = el.value; scheduleSave(); };
   A['change:summary'] = el => { cur.e[el.dataset.f] = el.value; scheduleSave(); };
   A['change:attach'] = async el => {
