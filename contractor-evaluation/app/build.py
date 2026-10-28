@@ -8,6 +8,11 @@ def inline(m):
     p = root / m.group(1)
     return '<script>\n' + p.read_text(encoding='utf-8') + '\n</script>' if p.exists() else ''
 html = re.sub(r'<script src="([^"]+)"[^>]*></script>', inline, html)
+import base64
+for name in ('letterhead_portrait_a4.jpg', 'background_landscape_a4.jpg'):
+    fp = root / 'brand' / name
+    if fp.exists():
+        html = html.replace("'brand/" + name + "'", "'data:image/jpeg;base64," + base64.b64encode(fp.read_bytes()).decode() + "'")
 out = root / 'dist'; out.mkdir(exist_ok=True)
 (out / 'index.html').write_text(html, encoding='utf-8')
 print('OK ->', out / 'index.html', len(html.encode('utf-8')), 'bytes')
