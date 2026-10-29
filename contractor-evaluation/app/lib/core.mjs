@@ -150,6 +150,8 @@ function checkConsolidated(c, ratings) {
 /* شكل السجلات: الواجهة تفترض أن الأسماء والتواريخ نصوص وأن البنى المعروفة كائنات أو قوائم، وسجل واحد مخالف كان يكفي
    لإيقاف شاشات كل المستخدمين. ولا يُقبل اسم حقل من خصائص Object.prototype في أي عمق (toString و__proto__ وأمثالهما). */
 const PROTO_KEYS = new Set(Object.getOwnPropertyNames(Object.prototype));
+/* النسخة الموقعة من إخطار العقد (الحالي أو السابق قبل إعادة الإصدار) وثيقة رسمية: متاحة لموظفي الإدارة ولا تُحذف عبر سجل مرفق */
+const isNoticeFile = (doc, path) => doc.data.contracts.some(c => c.noticeFile === path || c.previousNoticeFile === path);
 const TEXT_FIELDS = new Set(['id', 'name', 'name_ar', 'name_en', 'label', 'subject', 'to', 'contract_no', 'code', 'location', 'description', 'contact_name', 'contact_phone', 'contact_email', 'email', 'cr_number', 'mof_grade', 'notes', 'note', 'reviewNote', 'approvalNote', 'returnedNote', 'reopenReason', 'strengths', 'weaknesses', 'recommendation', 'refNo', 'type', 'role', 'status', 'model', 'username', 'bodyHtml', 'path', 'mime', 'itemKey', 'axisKey', 'consequence', 'method', 'templateId', 'companyId', 'projectId', 'contractId', 'cycleId', 'evaluationId', 'evaluatorId', 'leadEngineer', 'uploadedBy', 'issuedBy', 'createdBy', 'approvedBy', 'reviewedBy', 'returnedBy', 'noticeFile', 'noticeLetterId', 'noticeStatus', 'status_reason']);
 const isDateField = k => /(At|Date|_date|_until)$/.test(k);
 const NUM_FIELDS = new Set(['value', 'durationMonths', 'version', 'size']);
@@ -431,9 +433,9 @@ export class Server {
         if (rec.consolidated && (!same(prev ? prev.consolidated : null, rec.consolidated) || entering('approved'))) {
           const excl = new Set(rec.excluded || []);
           if (doc.data.evaluations.some(e => e.cycleId === rec.id && e.status === 'returned' && !excl.has(e.id))) throw E.returnedOut();
-          if (this.staleConsolidation(doc, rec)) throw E.staleInputs();
           /* توحيد جديد يحمل بصمة تقييماته؛ توحيد بلا بصمة يأتي من نسخة قديمة من البرنامج ما زالت مفتوحة في متصفح */
           if (!same(prev ? prev.consolidated : null, rec.consolidated) && !isObj(rec.consolidated.inputs)) throw E.bad('نسخة البرنامج المفتوحة في متصفحك قديمة. أعد تحميل الصفحة ثم أعد التوحيد.');
+          if (this.staleConsolidation(doc, rec)) throw E.staleInputs();
         }
         if (entering('closed') && me.role !== 'admin') throw E.forbid('إقفال الدورة دون اعتماد لمدير النظام فقط.');
         if (!prev) {
@@ -498,7 +500,7 @@ export class Server {
         if (!isStr(rec.path, 400) || !FILE_RE.test(rec.path) || rec.path.includes('..') || rec.path.split('/')[1] !== rec.contractId) throw E.bad('مسار مرفق غير صالح.');
         if (!contract(rec.contractId)) throw E.bad('العقد غير موجود.');
         /* سجل مرفق لا يُنشأ لملف موجود (ولا لإخطار عقد موقّع)، وإلا صار وسيلة لحذف ملفات الآخرين */
-        if (doc.data.attachments.some(a => a.path === rec.path) || doc.data.contracts.some(c => c.noticeFile === rec.path)) throw E.bad('المرفق مسجل من قبل.');
+        if (doc.data.attachments.some(a => a.path === rec.path) || isNoticeFile(doc, rec.path)) throw E.bad('المرفق مسجل من قبل.');
         if (r < 2 && !this.onTeam(doc, me, rec.contractId)) throw E.forbid('لست ضمن فريق تقييم هذا العقد.');
         if (rec.evaluationId) { const e = doc.data.evaluations.find(x => x.id === rec.evaluationId); if (!e) throw E.bad('التقييم غير موجود.'); if (e.contractId !== rec.contractId) throw E.bad('التقييم لا يتبع هذا العقد.'); if (e.evaluatorId !== me.id && r < 2) throw E.forbid(); if (r < 2 && e.status === 'submitted') throw E.forbid('قُدِّم التقييم، فلا تُضاف إليه مستندات إلا بعد إعادته.'); }
         else if (r < 2) throw E.forbid();
@@ -658,7 +660,7 @@ export class Server {
       this.authorizeRemove(doc, me, b.coll, prev);
       doc.data[b.coll] = doc.data[b.coll].filter(x => x.id !== b.id);
       const a = this.clientEntry(me, b.audit, b.coll, b.id); if (a) doc.audit.push(a);
-      removed = doc.data.contracts.some(c => c.noticeFile === prev.path) ? null : prev;     // ملف إخطار عقد لا يُحذف مع سجل مرفق
+      removed = isNoticeFile(doc, prev.path) ? null : prev;     // ملف إخطار عقد لا يُحذف مع سجل مرفق
     });
     if (b.coll === 'attachments' && removed && typeof removed.path === 'string' && FILE_RE.test(removed.path)) await this.store.del(this.P.files + sha256hex(removed.path)).catch(e => this.log('file delete failed', e && e.message));   // حذف السجل يحذف ملفه أيضاً
     return { ok: true, rev: r.rev, prevRev: r.prevRev, others: r.others };
@@ -802,7 +804,7 @@ export class Server {
 
   /* ---------- المرفقات ---------- */
   canSeeFile(doc, user, path, att) {
-    if (doc.data.contracts.some(k => k.noticeFile === path)) return true;                 // إخطار العقد الموقّع وثيقة رسمية متاحة لكل موظفي الإدارة
+    if (isNoticeFile(doc, path)) return true;                 // إخطار العقد الموقّع وثيقة رسمية متاحة لكل موظفي الإدارة
     if (!att) return canViewAll(user);
     if (canViewAll(user) || !att.evaluationId) return true;
     return this.visibleEvals(doc, user).some(e => e.id === att.evaluationId);
@@ -816,7 +818,7 @@ export class Server {
       if (!FILE_RE.test(path) || path.includes('..')) throw E.bad('مسار ملف غير صالح.');
       const key = this.P.files + sha256hex(path);
       const decide = ({ user, doc }) => {
-        const r = rankOf(user); const att = doc.data.attachments.find(a => a.path === path) || null; const notice = doc.data.contracts.some(c => c.noticeFile === path);
+        const r = rankOf(user); const att = doc.data.attachments.find(a => a.path === path) || null; const notice = isNoticeFile(doc, path);
         if (m === 'GET') { if (!this.canSeeFile(doc, user, path, att)) throw E.notFound('الملف غير موجود.'); return { user, att }; }
         if (r < 1) throw E.forbid('حساب المتابعة للاطلاع فقط ولا يملك صلاحية التعديل.');
         if (m === 'DELETE') {

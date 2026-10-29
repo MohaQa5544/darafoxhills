@@ -85,6 +85,12 @@ await t('a fake attachment record cannot be used to delete a contract\'s signed 
   eq((await file(A, 'POST', own.path, eng, Buffer.from('%PDF own'), 'application/pdf')).status, 200); eq((await rpc(A, 'put', { coll: 'attachments', rec: own, base: null }, eng)).status, 200, 'own attachment');
   const moved = Object.assign({}, own, { path: notice, updatedAt: iso(9) }); ok((await rpc(A, 'put', { coll: 'attachments', rec: moved, base: own.updatedAt }, head)).status >= 400, 'attachment re-pointed to the notice');
   eq((await file(A, 'GET', notice, head)).status, 200, 'notice still downloadable');
+  /* بعد إعادة إصدار الإخطار تبقى النسخة الموقعة السابقة وثيقة محمية */
+  const k2 = (await docOf(s)).data.contracts.find(c => c.id === K2.id); const re = Object.assign({}, k2, { noticeStatus: 'issued', previousNoticeFile: notice, updatedAt: iso(12) }); delete re.noticeFile; delete re.noticeAckAt;
+  eq((await rpc(A, 'put', { coll: 'contracts', rec: re, base: k2.updatedAt }, head)).status, 200, 're-issued notice');
+  ok((await rpc(A, 'put', { coll: 'attachments', rec: Object.assign({}, fake, { id: uuid(), contractId: K2.id, evaluationId: undefined, uploadedBy: (await docOf(s)).data.users.find(u => u.username === 'head').id }), base: null }, head)).status >= 400, 'attachment record registered for the previous signed notice');
+  eq((await file(A, 'DELETE', notice, eng)).status, 403, 'engineer deleted the previous signed notice');
+  eq((await file(A, 'GET', notice, eng)).status, 200, 'previous signed notice stays available to staff');
 });
 
 await t('a remove decided on a stale instance cache still removes the record and its file', async () => {

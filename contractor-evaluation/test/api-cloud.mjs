@@ -142,7 +142,7 @@ await t('follow-up account sees everything and can change nothing', async () => 
 });
 await t('only approvers approve; only admin reopens; company status for approvers', async () => {
   let d = await load('head'); let c = d.cycles.find(x => x.id === cy1.id);
-  eq((await put('head', 'cycles', Object.assign({}, c, { status: 'consolidated', consolidated: { total: 7.5, rating: 'good', axes: [], evaluationIds: [], count: 0 }, updatedAt: now() }), c.updatedAt)).status, 409, 'consolidation that leaves out a submitted evaluation');
+  eq((await put('head', 'cycles', Object.assign({}, c, { status: 'consolidated', consolidated: { total: 7.5, rating: 'good', axes: [], evaluationIds: [], count: 0, inputs: {} }, updatedAt: now() }), c.updatedAt)).status, 409, 'consolidation that leaves out a submitted evaluation');
   const e1 = d.evaluations.find(x => x.id === ev1.id);
   const cons = Object.assign({}, c, { status: 'consolidated', consolidated: { total: 7.5, rating: 'good', axes: [], evaluationIds: [ev1.id], count: 1, inputs: { [ev1.id]: e1.updatedAt } }, reviewedBy: U.head, updatedAt: now() }); eq((await put('head', 'cycles', cons, c.updatedAt)).status, 200);
   eq((await put('head', 'cycles', Object.assign({}, cons, { status: 'approved', approvedBy: U.head, updatedAt: now() }), cons.updatedAt)).status, 403);

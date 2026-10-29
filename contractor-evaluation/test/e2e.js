@@ -90,6 +90,16 @@ const pdf = async (page, name) => { await page.emulateMedia({ media: 'print' });
     if (r.dirs.length !== 1 || r.project !== r.dirs[0]) throw new Error('حساب مدير الإدارة تكرر أو لم تُنسب إليه سجلاته: ' + JSON.stringify(r));
     await logout(); await login('director', 'Dir#2026'); await page.waitForSelector('.kpis'); await logout(); await login('admin', 'Admin#2026'); await page.waitForSelector('.kpis');
   });
+  await step('إعادة تعيين كلمة مرور أجراها المدير هنا لا تُلغيها نسخة مستوردة', async () => {
+    const dir = await page.evaluate(() => window.EV.state.data.users.find(u => u.username === 'director'));
+    await page.goto(URL + '#/settings/users'); await page.waitForSelector(`[data-act="resetPw"][data-id="${dir.id}"]`); await page.click(`[data-act="resetPw"][data-id="${dir.id}"]`); await page.waitForSelector('#modal [data-m="ok"]'); await page.click('#modal [data-m="ok"]'); await page.waitForTimeout(600);
+    const hash = await page.evaluate(() => window.EV.hashPassword('Dir#2026', 'dir-salt'));
+    const payload = { users: [{ id: dir.id, username: 'director', name: 'مدير الإدارة', role: 'director', active: true, salt: 'dir-salt', hash, mustChange: false }], exportedAt: new Date().toISOString() };
+    await page.goto(URL + '#/settings/backup'); await page.waitForSelector('input[data-change="importBackup"]', { state: 'attached' });
+    await page.setInputFiles('input[data-change="importBackup"]', { name: 'after-reset.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(payload)) }); await page.waitForSelector('#modal [data-m="ok"]'); await page.click('#modal [data-m="ok"]'); await page.waitForTimeout(1200);
+    await logout(); await login('director', 'Dir#2026'); await page.waitForTimeout(500); if (await page.$('.kpis')) throw new Error('عادت كلمة المرور القديمة بعد الاستيراد');
+    await login('director', '123456'); await page.waitForSelector('form[data-form="password"]'); await page.evaluate(() => sessionStorage.removeItem('ev_user'));
+  });
   console.log(errors.length ? 'ERRORS:\n' + errors.join('\n') : 'No console/page errors');
   await browser.close();
 })().catch(e => { console.error('TEST FAILED', e.message); process.exit(1); });
