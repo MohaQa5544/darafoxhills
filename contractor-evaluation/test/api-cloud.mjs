@@ -392,22 +392,25 @@ await t('an evaluation out for correction blocks consolidation and approval unti
   const c0 = (await load('head')).cycles.find(x => x.id === cy.id);
   let r = await put('head', 'cycles', Object.assign({}, c0, { status: 'consolidated', consolidated: consOf([e2]), updatedAt: now() }), c0.updatedAt); eq(r.status, 409, 'consolidation that leaves out the returned evaluation'); eq(r.body.code, 'returned_pending');
   const ex = Object.assign({}, c0, { excluded: [e1.id], excludeReasons: { [e1.id]: 'غادر المقيّم الإدارة' }, updatedAt: now() }); eq((await put('head', 'cycles', ex, c0.updatedAt)).status, 200, 'returned evaluation excluded with a reason');
+  r = await put('head', 'cycles', Object.assign({}, ex, { status: 'consolidated', consolidated: { total: 8, rating: 'good', axes: [], evaluationIds: [e2.id], count: 1, method: 'mean', at: now() }, updatedAt: now() }), ex.updatedAt); eq(r.status, 400, 'consolidation without a fingerprint (an old page still open in a browser)');
   const cons = Object.assign({}, ex, { status: 'consolidated', consolidated: consOf([e2]), updatedAt: now() }); eq((await put('head', 'cycles', cons, ex.updatedAt)).status, 200, 'consolidation once it is excluded');
   const inc = Object.assign({}, cons, { excluded: [], updatedAt: now() }); eq((await put('head', 'cycles', inc, cons.updatedAt)).status, 200, 'included again');
   r = await put('waqf', 'cycles', Object.assign({}, inc, { status: 'approved', approvedBy: U.waqf, approvedAt: now(), consequence: 'improvement', updatedAt: now() }), inc.updatedAt); eq(r.status, 409, 'approval while an evaluation is out for correction'); eq(r.body.code, 'returned_pending');
 });
 await t('a consolidation saved by an earlier version can be approved unless its evaluations changed after it', async () => {
   const mk = label => ({ id: randomUUID(), contractId: k1.id, type: 'interim', label, status: 'consolidated', method: 'mean', excluded: [], evalWeights: {} });
-  const cyA = mk('دورة قديمة 1'), cyB = mk('دورة قديمة 2');
+  const cyA = mk('دورة قديمة 1'), cyB = mk('دورة قديمة 2'), cyC = Object.assign(mk('دورة قديمة مرجّحة'), { method: 'weighted' });
   const evA = { id: randomUUID(), cycleId: cyA.id, contractId: k1.id, evaluatorId: U.eng1, status: 'submitted', scores: {}, computed: { total: 7, axes: [] }, submittedAt: '2026-10-01T09:00:00.000Z', updatedAt: '2026-10-01T09:00:00.000Z' };
   const evB = Object.assign({}, evA, { id: randomUUID(), cycleId: cyB.id, updatedAt: '2026-10-02T09:00:00.000Z' });
   cyA.consolidated = { axes: [], total: 7, rating: 'good', critical: false, count: 1, evaluationIds: [evA.id], method: 'mean', at: '2026-10-01T10:00:00.000Z' };
   cyB.consolidated = Object.assign({}, cyA.consolidated, { evaluationIds: [evB.id] });
-  const r0 = await rpc('import', { payload: { cycles: [cyA, cyB], evaluations: [evA, evB] } }, S.admin); eq(r0.status, 200, (r0.body && r0.body.error) || '');
+  const evC = Object.assign({}, evA, { id: randomUUID(), cycleId: cyC.id }); cyC.consolidated = Object.assign({}, cyA.consolidated, { evaluationIds: [evC.id], method: 'weighted' });
+  const r0 = await rpc('import', { payload: { cycles: [cyA, cyB, cyC], evaluations: [evA, evB, evC] } }, S.admin); eq(r0.status, 200, (r0.body && r0.body.error) || '');
   const d = await load('waqf'); const a = d.cycles.find(x => x.id === cyA.id), b = d.cycles.find(x => x.id === cyB.id);
   const appr = x => Object.assign({}, x, { status: 'approved', approvedBy: U.waqf, approvedAt: now(), consequence: 'improvement', updatedAt: now() });
   eq((await put('waqf', 'cycles', appr(a), a.updatedAt)).status, 200, 'earlier-version consolidation, nothing changed since');
   const r = await put('waqf', 'cycles', appr(b), b.updatedAt); eq(r.status, 409, 'earlier-version consolidation whose evaluation changed after it'); eq(r.body.code, 'stale_inputs');
+  const cc = d.cycles.find(x => x.id === cyC.id); eq((await put('waqf', 'cycles', appr(cc), cc.updatedAt)).status, 409, 'earlier-version weighted consolidation (its weights were never recorded)');
 });
 await t('a batch saves several records together or not at all', async () => {
   const c = (await load('admin')).companies.find(x => x.id === comp.id);

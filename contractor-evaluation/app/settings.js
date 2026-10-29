@@ -56,26 +56,30 @@
       <div class="card"><h3>عن البرنامج</h3><p>${EV.isCloud() ? 'سجل الأداء — نظام تقييم أداء المقاولين والاستشاريين، الإصدار 1.1 (سحابي). يعمل على خادم Vercel ببيانات مشتركة لكل الفريق؛ الدخول وكلمات المرور والصلاحيات محمية على الخادم، وتُحفظ نسخة احتياطية يومية تلقائياً.' : 'سجل الأداء — نظام تقييم أداء المقاولين والاستشاريين، الإصدار 1.0 (أوفلاين). يعمل من مجلد دروب بوكس المشترك دون خادم؛ كل سجل يُحفظ ملفاً مستقلاً داخل <code>data</code> فلا تتعارض تعديلات الزملاء.'} المرجع: المنهجية المرجعية للإدارة العامة للأوقاف (أكتوبر 2026).</p></div>`), { title: 'البيانات' }); });
   A.exportBackup = async () => { EV.download('سجل_الأداء_نسخة_' + EV.today() + '.json', await st.store.exportAll(), 'application/json'); await EV.audit('backup_export', 'system', null); };
   /* الاستيراد في البرنامج الأوفلاين (نسخة أوفلاين من متصفح أو مجلد آخر، أو نسخة من البرنامج السحابي):
-     - الحساب الموجود هنا باسم المستخدم نفسه يبقى بمعرّفه المحلي وبكلمة مروره هنا، ويُستبدل معرّفه الوارد في كل النسخة
+     - الحساب الموجود هنا باسم المستخدم نفسه يبقى بمعرّفه المحلي (وبكلمة مروره هنا إن كان غيّرها)، ويُستبدل معرّفه الوارد في كل النسخة
        (التقييمات والفرق والسجل…)، فلا يتكرر الحساب؛ والاسم المكرر داخل النسخة نفسها يُدمج في حساب واحد.
      - من يستورد يبقى مديراً نشطاً. ونسخة البرنامج السحابي لا تحمل كلمات المرور، فيبدأ فيها الحساب الجديد بكلمة 123456 مع إلزامه بتغييرها */
   async function offlinePayload(text) {
     const d = JSON.parse(text); if (!d || typeof d !== 'object' || Array.isArray(d)) return text;
     const cloud = d.format === 'sijil-alada-cloud';
     if (cloud) for (const k of ['format', 'scope', 'version', 'credentials', 'logins', 'counters', 'exportedAt']) delete d[k];
-    const remap = new Map(), chosen = new Map(), drop = new Set(), norm = x => String(x || '').trim().toLowerCase();
-    for (const u of Array.isArray(d.users) ? d.users : []) {
-      if (!u || typeof u !== 'object') continue; const name = norm(u.username); if (!name) continue;
-      if (chosen.has(name)) { if (u.id !== chosen.get(name)) remap.set(u.id, chosen.get(name)); drop.add(u); continue; }
-      const cur = byId('users', u.id) || list('users').find(x => norm(x.username) === name);
-      chosen.set(name, cur ? cur.id : u.id);
-      if (cur && cur.id !== u.id) { remap.set(u.id, cur.id); u.username = cur.username; }
-      if (cur && cur.hash) Object.assign(u, { salt: cur.salt, hash: cur.hash, mustChange: !!cur.mustChange });
-      else if (cloud || !u.hash || !u.salt) { u.salt = uid(); u.hash = await EV.hashPassword('123456', u.salt); u.mustChange = true; }
-      if (cur && cur.id === st.user.id) Object.assign(u, { role: cur.role, active: true });
+    const norm = x => String(x || '').trim().toLowerCase(); const remap = new Map(), groups = new Map(), keep = [];
+    for (const u of Array.isArray(d.users) ? d.users : []) { const name = u && typeof u === 'object' ? norm(u.username) : ''; if (!name) { keep.push(u); continue; } if (!groups.has(name)) groups.set(name, []); groups.get(name).push(u); }
+    for (const [name, us] of groups) {
+      /* الحساب الذي يبقى: من يستورد إن كان باسم المستخدم هذا، ثم الحساب الذي يدخل به صاحبه هنا (أول تطابق في الدخول)، ثم سجل في النسخة له حساب هنا، ثم أول سجل */
+      const local = (st.user && norm(st.user.username) === name ? byId('users', st.user.id) : null) || list('users').find(x => norm(x.username) === name) || us.map(x => byId('users', x.id)).find(Boolean) || null;
+      const target = local ? local.id : us[0].id; const u = us.find(x => x.id === target) || us[0];
+      for (const x of us) if (x.id !== target) remap.set(x.id, target);
+      if (local) u.username = local.username;
+      /* كلمة المرور: من غيّر كلمته هنا يحتفظ بها؛ وإلا تُعتمد كلمة النسخة إن كانت نسخة أوفلاين تحملها (استعادة نسخة في مجلد جديد)، وإلا 123456 مع إلزامه بتغييرها */
+      const incoming = !cloud && typeof u.hash === 'string' && u.hash && typeof u.salt === 'string' && u.salt;
+      if (local && local.hash && (!local.mustChange || !incoming)) Object.assign(u, { salt: local.salt, hash: local.hash, mustChange: !!local.mustChange });
+      else if (!incoming) { u.salt = uid(); u.hash = await EV.hashPassword('123456', u.salt); u.mustChange = true; }
+      if (local && st.user && local.id === st.user.id) Object.assign(u, { role: local.role, active: true });
       if (cloud) delete u.lastLoginAt;
+      keep.push(u);
     }
-    if (drop.size) d.users = d.users.filter(u => !drop.has(u));
+    if (Array.isArray(d.users)) d.users = keep;
     const fix = v => Array.isArray(v) ? v.map(fix) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [remap.get(k) || k, fix(x)])) : typeof v === 'string' && remap.has(v) ? remap.get(v) : v;
     if (remap.size) for (const k of Object.keys(d)) d[k] = fix(d[k]);
     return JSON.stringify(d);

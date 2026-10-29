@@ -79,6 +79,17 @@ const pdf = async (page, name) => { await page.emulateMedia({ media: 'print' });
     if (r.company !== me || r.project !== 'off-eng-0000001') throw new Error('السجلات لم تُنسب إلى الحسابات المدمجة: ' + JSON.stringify(r));
     await logout(); await login('offeng', 'Off#2026'); await page.waitForSelector('.kpis'); await logout(); await login('admin', 'Admin#2026'); await page.waitForSelector('.kpis');
   });
+  await step('استعادة نسخة أوفلاين: من لم يغيّر كلمته هنا يأخذ كلمته من النسخة، ومن يستورد يبقى صاحب سجلاته', async () => {
+    const me = await page.evaluate(() => window.EV.state.user.id); const hash = await page.evaluate(() => window.EV.hashPassword('Dir#2026', 'dir-salt'));
+    const payload = { users: [{ id: 'other-dir-0000001', username: 'director', name: 'مدير الإدارة', role: 'director', active: true, salt: 'dir-salt', hash, mustChange: false }, { id: 'stray-admin-00001', username: 'admin', name: 'حساب مكرر', role: 'admin', active: true, salt: 'x', hash: 'y' }, { id: me, username: 'admin', name: 'مدير النظام', role: 'admin', active: true, salt: 'x2', hash: 'y2' }],
+      companies: [{ id: 'restore-company-01', name_ar: 'شركة مستعادة', roles: ['contractor'], status: 'normal', createdBy: 'stray-admin-00001' }], projects: [{ id: 'restore-project-01', name: 'مشروع مستعاد', type: 'other', createdBy: 'other-dir-0000001' }], exportedAt: new Date().toISOString() };
+    await page.goto(URL + '#/settings/backup'); await page.waitForSelector('input[data-change="importBackup"]', { state: 'attached' });
+    await page.setInputFiles('input[data-change="importBackup"]', { name: 'restore.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(payload)) }); await page.waitForSelector('#modal [data-m="ok"]'); await page.click('#modal [data-m="ok"]'); await page.waitForTimeout(1200);
+    const r = await page.evaluate(() => { const d = window.EV.state.data; const n = x => String(x.username).trim().toLowerCase(); const dir = d.users.filter(u => n(u) === 'director'); return { admins: d.users.filter(u => n(u) === 'admin').map(u => u.id), stray: d.users.some(u => u.id === 'stray-admin-00001'), dirs: dir.map(u => u.id), company: (d.companies.find(c => c.id === 'restore-company-01') || {}).createdBy, project: (d.projects.find(p => p.id === 'restore-project-01') || {}).createdBy }; });
+    if (r.admins.length !== 1 || r.admins[0] !== me || r.stray || r.company !== me) throw new Error('سجلات المدير انتقلت إلى حساب مكرر: ' + JSON.stringify(r));
+    if (r.dirs.length !== 1 || r.project !== r.dirs[0]) throw new Error('حساب مدير الإدارة تكرر أو لم تُنسب إليه سجلاته: ' + JSON.stringify(r));
+    await logout(); await login('director', 'Dir#2026'); await page.waitForSelector('.kpis'); await logout(); await login('admin', 'Admin#2026'); await page.waitForSelector('.kpis');
+  });
   console.log(errors.length ? 'ERRORS:\n' + errors.join('\n') : 'No console/page errors');
   await browser.close();
 })().catch(e => { console.error('TEST FAILED', e.message); process.exit(1); });

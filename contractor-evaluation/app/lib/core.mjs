@@ -374,7 +374,8 @@ export class Server {
     const cur = doc.data.evaluations.filter(e => e.cycleId === cy.id && e.status === 'submitted' && !excl.has(e.id));
     const got = Array.isArray(c.evaluationIds) ? c.evaluationIds.slice().sort() : null; const legacy = !isObj(c.inputs);
     const method = cy.method || 'mean', w = o => Object.keys(isObj(o) ? o : {}).sort().map(k => [k, o[k]]);
-    if ((c.method || 'mean') !== method || (!legacy && method === 'weighted' && !same(w(c.evalWeights), w(cy.evalWeights)))) return true;
+    if ((c.method || 'mean') !== method) return true;
+    if (method === 'weighted' && (legacy || !same(w(c.evalWeights), w(cy.evalWeights)))) return true;   // الإصدارات السابقة لم تحفظ الأوزان التي وحّدت بها
     if (!got || !same(cur.map(e => e.id).sort(), got) || (c.count != null && c.count !== cur.length)) return true;
     /* توحيد من إصدار سابق لا يحمل بصمة التقييمات: قديم إن عُدّل أحد تقييماته بعد وقت التوحيد */
     if (legacy) return typeof c.at !== 'string' || cur.some(e => typeof e.updatedAt === 'string' && e.updatedAt > c.at);
@@ -431,6 +432,8 @@ export class Server {
           const excl = new Set(rec.excluded || []);
           if (doc.data.evaluations.some(e => e.cycleId === rec.id && e.status === 'returned' && !excl.has(e.id))) throw E.returnedOut();
           if (this.staleConsolidation(doc, rec)) throw E.staleInputs();
+          /* توحيد جديد يحمل بصمة تقييماته؛ توحيد بلا بصمة يأتي من نسخة قديمة من البرنامج ما زالت مفتوحة في متصفح */
+          if (!same(prev ? prev.consolidated : null, rec.consolidated) && !isObj(rec.consolidated.inputs)) throw E.bad('نسخة البرنامج المفتوحة في متصفحك قديمة. أعد تحميل الصفحة ثم أعد التوحيد.');
         }
         if (entering('closed') && me.role !== 'admin') throw E.forbid('إقفال الدورة دون اعتماد لمدير النظام فقط.');
         if (!prev) {
