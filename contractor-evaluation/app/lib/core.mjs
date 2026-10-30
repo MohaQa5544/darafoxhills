@@ -201,7 +201,7 @@ function checkEvaluation(e) {
 /* ---------- الخادم ---------- */
 export class Server {
   constructor(o) {
-    this.store = o.store; this.secret = o.secret || ''; this.seedUsers = Array.isArray(o.seedUsers) ? o.seedUsers : []; this.bank = o.bank;
+    this.store = o.store; this.secret = o.secret || ''; this.seedUsers = Array.isArray(o.seedUsers) ? o.seedUsers : []; this.bank = o.bank; this.adminReset = o.adminReset || null;
     this.P = pathsFor(o.prefix || 'ev/'); this.log = o.log || (() => { });
     this.cache = null; this.jobs = []; this.flushing = false; this.reading = null;
     this.limUser = new Limiter(8, 15 * 60e3); this.limIp = new Limiter(40, 15 * 60e3); this.limWrite = new Limiter(LIMITS.writesPer5Min, 5 * 60e3); this.limUpload = new Limiter(LIMITS.uploadsPer10Min, 10 * 60e3);
@@ -573,14 +573,19 @@ export class Server {
   }
 
   async opLogin(b, req) {
-    const username = lc(String(b.username || '').trim()); const pw = typeof b.password === 'string' ? b.password : '';
+    const username = lc(String(b.username || '').trim()); const typed = typeof b.password === 'string' ? b.password : ''; let pw = typed;
     if (!username || !pw || username.length > 80 || pw.length > 200) throw E.bad('أدخل اسم المستخدم وكلمة المرور.');
     const ip = ipKey(req);
     if (this.limIp.blocked(ip) || this.limUser.blocked(username)) throw E.limited();
     /* الذاكرة أولاً أياً كان عمرها، فمحاولات الدخول المجهولة لا تستهلك عمليات التخزين؛ والقراءة الجديدة عند الحاجة فقط */
+    await this.applyAdminReset();
     const t0 = Date.now(); let cur = await this.readDoc(false, Infinity);
     if (!cur.doc) { await this.mutate(() => null); cur = await this.readDoc(false, Infinity); }
-    const attempt = async d => { const u = d ? d.data.users.find(x => lc(x.username) === username) : null; const s = u && d.secrets[u.id]; return { u, s, ok: s ? await verifyPassword(s, pw) : (await hashPassword(pw, '0'.repeat(32)), false) }; };
+    /* كلمة مرور كُتبت بمسافة قبلها أو بعدها (لوحات الهواتف تضيفها) تُقبل بعد حذف المسافات */
+    const attempt = async d => { const u = d ? d.data.users.find(x => lc(x.username) === username) : null; const s = u && d.secrets[u.id]; if (!s) { await hashPassword(typed, '0'.repeat(32)); return { u, s, ok: false }; }
+      if (await verifyPassword(s, typed)) { pw = typed; return { u, s, ok: true }; }
+      const t = typed.trim(); if (t && t !== typed && await verifyPassword(s, t)) { pw = t; return { u, s, ok: true }; }
+      return { u, s, ok: false }; };
     let res = await attempt(cur.doc);
     if (res.ok && cur.at < t0) { cur = await this.readDoc(true); res = await attempt(cur.doc); }           // نجاح على نسخة مؤقتة: يُؤكَّد على أحدث نسخة
     else if (!res.ok && cur.at < t0 && this.loginRefresh(username, !!res.u)) { cur = await this.readDoc(true); res = await attempt(cur.doc); }   // مستخدم أُضيف أو كلمة أُعيدت للتو من نسخة أخرى — بقدر محدود
@@ -607,6 +612,22 @@ export class Server {
     const now = Date.now();
     if (known) { if (now - (this.userGate.get(username) || 0) < 5 * 60e3) return false; this.userGate.set(username, now); if (this.userGate.size > 5000) this.userGate.clear(); return true; }
     if (now - this.unknownGate < 60e3) return false; this.unknownGate = now; return true;
+  }
+  /* استعادة الدخول: متغير البيئة ADMIN_RESET على Vercel (من make-reset.mjs) يعيد كلمة مرور حساب واحد مرة واحدة لكل nonce،
+     مع إلزامه بتغييرها. من يملك إعدادات المشروع على Vercel يملك الخادم أصلاً، فلا يفتح هذا باباً جديداً. */
+  async applyAdminReset() {
+    const R = this.adminReset; if (!R || this.resetDone) return;
+    if (!isObj(R) || !USER_RE.test(String(R.username || '')) || typeof R.nonce !== 'string' || R.nonce.length < 8 || R.algo !== 'pbkdf2' || typeof R.salt !== 'string' || R.salt.length < 8 || typeof R.hash !== 'string' || !HEX.test(R.hash) || R.hash.length !== 64 || !Number.isInteger(R.iter) || R.iter < 10000) { this.resetDone = true; this.log('ADMIN_RESET: قيمة غير صالحة'); return; }
+    let cur = await this.readDoc(false, Infinity); if (!cur.doc) { await this.mutate(() => null); }
+    await this.mutate(d => {
+      if ((d.resets || []).includes(R.nonce)) return NOOP;
+      const u = d.data.users.find(x => lc(x.username) === lc(R.username)); if (!u) return NOOP;
+      const old = d.secrets[u.id] || {};
+      d.secrets[u.id] = { algo: 'pbkdf2', salt: R.salt, iter: R.iter, hash: R.hash, mustChange: true, pwv: (old.pwv || 0) + 1 };
+      u.active = true; d.resets = (d.resets || []).slice(-20).concat([R.nonce]);
+      d.audit.push(this.entry(null, 'password_reset_env', 'users', u.id, { name: u.username }));
+    });
+    this.resetDone = true; this.limUser.ok(lc(R.username));
   }
   async opLoad(b, req) { const { user, doc } = await this.freshAuthed(req); return { me: user.id, data: this.project(doc, user), rev: doc.rev }; }
   /* التحقق من طلب حفظ قبل إدخاله الطابور */

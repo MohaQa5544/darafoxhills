@@ -143,7 +143,7 @@ window.EV = (function () {
     const u = list('users').find(x => x.username.toLowerCase() === String(username || '').trim().toLowerCase());
     if (!u) throw new Error('اسم المستخدم غير موجود');
     if (!u.active) throw new Error('هذا الحساب معطَّل. راجع مدير النظام');
-    if ((await hashPassword(password, u.salt)) !== u.hash) throw new Error('كلمة المرور غير صحيحة');
+    if ((await hashPassword(password, u.salt)) !== u.hash && (String(password).trim() === password || (await hashPassword(String(password).trim(), u.salt)) !== u.hash)) throw new Error('كلمة المرور غير صحيحة');
     state.user = u; sessionStorage.setItem('ev_user', u.id); u.lastLoginAt = nowISO(); await save('users', u, null); await audit('login', 'users', u.id);
   }
   const logoutHooks = []; const onLogout = fn => logoutHooks.push(fn);

@@ -175,4 +175,20 @@ await t('a request that joins an in-flight read sent earlier still sees writes a
   eq((await file(A, 'GET', fp, engA)).status, 200, 'download right after the record was saved on another instance'); await other;
 });
 
+await t('a password typed with stray spaces is accepted; ADMIN_RESET restores the admin account once', async () => {
+  const s = store(); const A = await server(s);
+  const l = await rpc(A, 'login', { username: 'admin', password: ' ' + TEMP.admin + ' ' }); eq(l.status, 200, 'temporary password with spaces around it'); ok(l.body.mustChange);
+  eq((await rpc(A, 'login', { username: 'admin', password: TEMP.admin + 'x' })).status, 403, 'a wrong password is still refused');
+  const tok = await signin(A, 'admin');
+  const R = Object.assign({ username: 'ADMIN', nonce: 'reset-0001' }, await hashPassword('k7m3p9x2qa'));
+  const B = new Server({ store: s, secret: 'r'.repeat(64), seedUsers: seedHashed, bank, adminReset: R });
+  const r1 = await rpc(B, 'login', { username: 'admin', password: 'k7m3p9x2qa' }); eq(r1.status, 200, 'reset password works'); ok(r1.body.mustChange, 'reset password must be changed');
+  eq((await rpc(B, 'load', {}, tok)).status, 401, 'the session from before the reset is ended');
+  eq((await rpc(B, 'login', { username: 'admin', password: NEWPW('admin') })).status, 403, 'the old password no longer works');
+  const c = await rpc(B, 'password', { next: 'Fresh#2026ok' }, r1.body.token); eq(c.status, 200);
+  const C = new Server({ store: s, secret: 'r'.repeat(64), seedUsers: seedHashed, bank, adminReset: R });
+  eq((await rpc(C, 'login', { username: 'admin', password: 'Fresh#2026ok' })).status, 200, 'the same reset is not applied again on a new instance');
+  eq((await rpc(C, 'login', { username: 'admin', password: 'k7m3p9x2qa' })).status, 403);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`); if (fail) { console.log(failures.join('\n')); process.exit(1); }

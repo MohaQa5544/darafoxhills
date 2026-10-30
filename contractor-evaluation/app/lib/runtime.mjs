@@ -14,6 +14,7 @@ export function getServer() {
   if (server) return server;
   let bank = null; try { bank = loadBank(readFileSync(new URL('../bank.js', import.meta.url), 'utf8')); } catch (e) { console.error('bank.js load failed', e && e.message); }
   let seed = []; try { seed = JSON.parse(process.env.SEED_USERS || '[]'); } catch (e) { console.error('SEED_USERS is not valid JSON'); }
-  server = new Server({ store: blobStore(), secret: process.env.SESSION_SECRET || '', seedUsers: seed, bank, prefix: dataPrefix(process.env.VERCEL_ENV), log: (...a) => console.error(...a) });
+  let adminReset = null; if (process.env.ADMIN_RESET) try { adminReset = JSON.parse(process.env.ADMIN_RESET); } catch (e) { console.error('ADMIN_RESET is not valid JSON'); }
+  server = new Server({ store: blobStore(), secret: process.env.SESSION_SECRET || '', seedUsers: seed, bank, adminReset, prefix: dataPrefix(process.env.VERCEL_ENV), log: (...a) => console.error(...a) });
   return server;
 }
