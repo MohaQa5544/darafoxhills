@@ -124,7 +124,7 @@
     const p = []; if (FU.inDept()) p.push(FU.deptName(me().deptId)); else if (F.dept) p.push(FU.deptName(F.dept));
     if (F.status) p.push((statusOptions().find(x => x[0] === F.status) || [])[1]);
     if (F.follower) p.push('موظف المتابعة: ' + FU.userName(F.follower)); if (F.year) p.push('سنة ' + F.year); if (F.q.trim()) p.push('بحث: ' + F.q.trim());
-    return p.length ? p.join(' · ') : 'كل الكتاب والتكليفات';
+    return p.length ? p.join(' · ') : 'كل الكتب والتكليفات';
   }
   function drawReg() {
     const el = $('#reg-out'); if (!el) return; const g = query(), shown = g.slice(0, F.limit), nt = g.reduce((a, x) => a + x.ts.length, 0);

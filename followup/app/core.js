@@ -27,7 +27,8 @@ window.FU = (function () {
   const nowISO = () => new Date().toISOString();
   const byName = (a, b) => String(a.name).localeCompare(String(b.name), 'ar');
   /* البحث لا يفرّق بين صور الهمزة والتاء المربوطة والألف المقصورة ولا يتأثر بالتشكيل */
-  const norm = s => String(s == null ? '' : s).toLowerCase().replace(/[ً-ْـ]/g, '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي');
+  const MARKS = new RegExp('[' + String.fromCharCode(0x64B) + '-' + String.fromCharCode(0x652) + String.fromCharCode(0x640) + ']', 'g');   // التشكيل والتطويل
+  const norm = s => String(s == null ? '' : s).toLowerCase().replace(MARKS, '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي');
 
   /* ---------- التواريخ: تُخزَّن نصاً YYYY-MM-DD وتُحسب بالتوقيت العالمي فلا تتأثر بالمنطقة الزمنية ---------- */
   const pad = n => String(n).padStart(2, '0');
@@ -153,7 +154,7 @@ window.FU = (function () {
 
   /* ---------- المرفقات ---------- */
   function safeFileName(name) {
-    let s = String(name || '').normalize('NFC').replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, '_').replace(/\.{2,}/g, '.').replace(/^[.\s]+|[.\s]+$/g, '');
+    let s = String(name || '').normalize('NFC').replace(/[\\/:*?"<>|\x00-\x1f\x7f]/g, '_').replace(/\.{2,}/g, '.').replace(/^[.\s]+|[.\s]+$/g, '');
     if (!s) s = 'file';
     if (s.length > 120) { const m = /\.[A-Za-z0-9]{1,10}$/.exec(s); const ext = m ? m[0] : ''; s = s.slice(0, 120 - ext.length) + ext; }
     return s;
@@ -181,7 +182,7 @@ window.FU = (function () {
   function download(name, text, type) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: type || 'text/plain;charset=utf-8' })); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000); }
   /* خلية CSV: نص يبدأ بـ = أو + أو - أو @ يُسبق بفاصلة عليا حتى لا تنفّذه برامج الجداول صيغةً */
   const csvCell = v => { if (v == null) return '""'; if (typeof v === 'number') return String(v); let t = String(v); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return '"' + t.replace(/"/g, '""') + '"'; };
-  const csvText = rows => '﻿' + rows.map(r => r.map(csvCell).join(',')).join('\r\n');
+  const csvText = rows => String.fromCharCode(0xFEFF) + rows.map(r => r.map(csvCell).join(',')).join('\r\n');
 
   /* ---------- التهيئة الأولى والدخول ---------- */
   function applySettings() { state.settings = Object.assign({}, DEFAULTS, db().settings || {}); }
