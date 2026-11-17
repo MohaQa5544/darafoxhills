@@ -86,7 +86,7 @@ const ok = (c, name) => { if (c) pass++; else { fails.push(name); console.log(' 
   await logout(p);
 
   // ممثل إدارة الاستثمار: يرى كتب إدارته فقط
-  await firstLogin(p, 'aalqadi', 'rep-pass');
+  await firstLogin(p, 'aalqadhi', 'rep-pass');
   ok((await text(p, '.who')).includes('إدارة الاستثمار'), 'rep header shows dept');
   ok(await p.locator('nav.tabs a[href="#/settings"]').count() === 0, 'rep has no settings');
   ok((await text(p, 'main')).includes('بانتظار تأكيد استلام المذكرة (1)'), 'rep sees pending receipt');
