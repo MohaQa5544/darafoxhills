@@ -73,7 +73,7 @@
       <div class="row wrap">${FU.isOfficer() ? '<button class="btn primary" data-act="newLetter">＋ كتاب جديد</button>' : ''}<a class="btn" href="#/print/summary">🖨 طباعة الملخص</a></div></div>
       <div class="tiles">${tile(s.open, 'تكليفات مفتوحة', 'open', 't-green')}${tile(s.overdue, 'متأخرة عن موعدها', 'overdue', 't-bad')}${tile(s.soon, set.soonDays > 0 ? 'تستحق خلال ' + (set.soonDays === 2 ? 'يومين' : FU.daysWord(set.soonDays)) : 'تستحق اليوم', 'soon', 't-warn')}${tile(s.problem, 'يوجد مشكلة', 'problem', 't-bad')}${tile(s.not_received, 'لم تُستلم مذكرتها', 'not_received', 't-gray')}${tile(s.done, 'تم تنفيذها', 'done', 't-ok', 'all')}</div>
       ${unassigned ? `<div class="note warn">${unassigned === 1 ? 'كتاب واحد لم يُحَل' : unassigned + ' كتب لم تُحَل'} إلى أي إدارة بعد. <button class="linkbtn" data-act="preset" data-status="unassigned">عرضها</button></div>` : ''}
-      ${ready ? `<div class="note ok">${ready === 1 ? 'معاملة واحدة اكتملت إحالاتها' : ready + ' معاملات اكتملت إحالاتها'} وتنتظر النقل إلى السجل المغلق. <button class="linkbtn" data-act="preset" data-status="ready">عرضها</button></div>` : ''}
+      ${ready ? `<div class="note ok">${ready === 1 ? 'معاملة واحدة اكتملت إحالاتها' : ready + ' معاملات اكتملت إحالاتها'} وتنتظر الإغلاق. <button class="linkbtn" data-act="preset" data-status="ready">عرضها وإغلاقها</button></div>` : ''}
       ${waiting.length ? `<div class="card"><h3>بانتظار تأكيد استلام المذكرة (${waiting.length})</h3>${waiting.map(t => { const l = letterOf(t); return `<div class="att"><a href="#/letter/${esc(l.id)}"><b>${esc(l.subject)}</b> <span class="muted">· رقم ${esc(l.number)} · ${fmtDate(l.date)}</span></a><span class="grow"></span>${dueBadge(t)}<button class="btn small primary" data-act="confirmReceipt" data-id="${esc(t.id)}">✔ تأكيد الاستلام</button></div>`; }).join('')}</div>` : ''}
       ${dept ? '' : `<div class="card"><h3>ملخص الإدارات</h3>${tasks.length ? deptTable(tasks) : '<p class="muted">لا توجد تكليفات مسجّلة بعد.</p>'}</div>`}
       <div class="grid2 cols">
@@ -118,10 +118,12 @@
     out.sort(F.sort === 'old' ? (a, b) => -desc(a, b) : F.sort === 'due' ? (a, b) => { const x = dueKey(a), y = dueKey(b); return x < y ? -1 : x > y ? 1 : desc(a, b); } : desc);
     return out;
   }
+  /* معاملة اكتملت كل إحالاتها ولم تُغلق بعد: يغلقها مسؤول المتابعة فتنتقل إلى سجل المغلقة */
+  const canClose = l => FU.isOfficer() && !l.closedAt && !l.deletedAt && FU.letterState(l) === 'closed';
   function regTable(groups, print) {
     const rows = groups.map(g => {
       const l = g.l, n = Math.max(1, g.ts.length), rs = n > 1 ? ` rowspan="${n}"` : '';
-      const head = `<td class="c num"${rs}>${esc(l.seq)}</td><td class="subj" style="min-width:200px"${rs}>${print ? esc(l.subject) : `<a href="#/letter/${esc(l.id)}">${esc(l.subject)}</a>`}${l.priority === 'urgent' ? ' ' + badge('عاجل', 'bad') : ''}${l.closedAt ? ' ' + badge('مغلقة', 'ok') : ''}${l.from ? `<div class="muted small">من: ${esc(l.from)}</div>` : ''}</td><td class="c"${rs}>${esc(l.number)}</td><td class="c num"${rs}>${fmtDate(l.date)}</td>`;
+      const head = `<td class="c num"${rs}>${esc(l.seq)}</td><td class="subj" style="min-width:200px"${rs}>${print ? esc(l.subject) : `<a href="#/letter/${esc(l.id)}">${esc(l.subject)}</a>`}${l.priority === 'urgent' ? ' ' + badge('عاجل', 'bad') : ''}${l.closedAt ? ' ' + badge('مغلقة', 'ok') : ''}${l.from ? `<div class="muted small">من: ${esc(l.from)}</div>` : ''}${l.closedAt ? `<div class="muted small">أُغلقت ${esc(FU.fmtDateTime(l.closedAt))} · ${esc(FU.userName(l.closedBy))}</div>` : ''}${!print && canClose(l) ? `<div class="top-gap"><button class="btn small primary" data-act="closeLetter" data-id="${esc(l.id)}">✔ إغلاق المعاملة</button></div>` : ''}</td><td class="c"${rs}>${esc(l.number)}</td><td class="c num"${rs}>${fmtDate(l.date)}</td>`;
       if (!g.ts.length) return `<tr class="first">${head}<td colspan="8" class="muted c">لم يُحَل إلى أي إدارة بعد</td></tr>`;
       return g.ts.map((t, k) => {
         const i = FU.taskInfo(t), c = i.st.c;
@@ -130,7 +132,7 @@
     }).join('');
     return `<table class="grid reg"><thead><tr><th>م</th><th>الموضوع</th><th>رقم الكتاب</th><th>تاريخ الكتاب الوارد</th><th>جهة الاختصاص</th><th>حالة الإجراء</th><th>المدة (أيام)</th><th>الاستحقاق</th><th>عدد الإفادات</th><th>التذكيرات</th><th>موظف المتابعة</th><th>آخر إفادة</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
-  const statusOptions = () => [['', 'كل الحالات']].concat(Object.keys(SPECIAL).map(k => [k, SPECIAL[k]]), Object.keys(STATUS).map(k => [k, STATUS[k].t]), FU.inDept() ? [] : [['ready', 'مكتملة تنتظر الإغلاق'], ['unassigned', 'كتب لم تُحَل بعد']]);
+  const statusOptions = () => [['', 'كل الحالات']].concat(Object.keys(SPECIAL).map(k => [k, SPECIAL[k]]), Object.keys(STATUS).map(k => [k, STATUS[k].t]), FU.inDept() ? [] : [['ready', 'مكتملة بانتظار الإغلاق'], ['unassigned', 'كتب لم تُحَل بعد']]);
   /* وصف التصفية الحالية بالكلمات (يظهر في رأس التقرير المطبوع) */
   function filterSummary() {
     const p = [BOX[F.box]]; if (FU.inDept()) p.push(FU.deptName(me().deptId)); else if (F.dept) p.push(FU.deptName(F.dept));

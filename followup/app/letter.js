@@ -30,10 +30,10 @@
     if (FU.inDept() && !ts.length) return FU.page(`${back}<div class="card empty">هذا الكتاب غير موجَّه إلى إدارتك.</div>`);
     const tools = !off ? '' : gone ? `<button class="btn small primary" data-act="restoreLetter" data-id="${i}">↩ استرجاع المعاملة</button><button class="btn small danger" data-act="purgeLetter" data-id="${i}">حذف نهائي</button>`
       : shut ? `<button class="btn small" data-act="reopenLetter" data-id="${i}">↩ إعادة فتح المعاملة</button><button class="btn small danger" data-act="delLetter" data-id="${i}">حذف المعاملة</button>`
-      : `<button class="btn small" data-act="editLetter" data-id="${i}">تعديل بيانات الكتاب</button><button class="btn small" data-act="addTask" data-id="${i}">＋ إحالة إلى إدارة</button>${stt === 'open' ? '' : `<button class="btn small" data-act="closeLetter" data-id="${i}">✔ نقل إلى المغلقة</button>`}<button class="btn small danger" data-act="delLetter" data-id="${i}">حذف المعاملة</button>`;
+      : `<button class="btn small" data-act="editLetter" data-id="${i}">تعديل بيانات الكتاب</button><button class="btn small" data-act="addTask" data-id="${i}">＋ إحالة إلى إدارة</button>${stt === 'open' ? '' : `<button class="btn small" data-act="closeLetter" data-id="${i}">✔ إغلاق المعاملة</button>`}<button class="btn small danger" data-act="delLetter" data-id="${i}">حذف المعاملة</button>`;
     const banner = gone ? `<div class="note warn">هذه المعاملة محذوفة منذ ${esc(FU.fmtDateTime(l.deletedAt))} بواسطة ${esc(FU.userName(l.deletedBy))}. يمكن استرجاعها خلال ${esc(FU.daysWord(trashLeft(l)))}، ثم تُحذف نهائياً.</div>`
-      : shut ? `<div class="note ok">معاملة مغلقة منذ ${esc(FU.fmtDateTime(l.closedAt))} — للعرض فقط.${off ? ' أعد فتحها إن احتجت إلى تعديلها.' : ''}</div>`
-      : off && stt === 'closed' ? `<div class="note ok">اكتملت كل إحالات هذا الكتاب. <button class="linkbtn" data-act="closeLetter" data-id="${i}">انقله إلى سجل المعاملات المغلقة</button></div>` : '';
+      : shut ? `<div class="note ok">معاملة مغلقة منذ ${esc(FU.fmtDateTime(l.closedAt))}، أغلقها ${esc(FU.userName(l.closedBy))} — للعرض فقط.${off ? ' أعد فتحها إن احتجت إلى تعديلها.' : ''}</div>`
+      : off && stt === 'closed' ? `<div class="note ok">اكتملت كل إحالات هذا الكتاب. <button class="btn small primary" data-act="closeLetter" data-id="${i}">✔ إغلاق المعاملة</button> فتنتقل إلى سجل المعاملات المغلقة.</div>` : '';
     const state = gone ? badge('محذوفة', 'bad') : shut ? badge('مغلقة', 'ok') : FU.inDept() ? '' : stt === 'closed' ? badge('مكتملة الإحالات', 'ok') : stt === 'open' ? badge('مفتوحة', 'warn') : badge('لم تُحَل بعد', 'gray');
     FU.page(`<div class="row between">${back}<div class="row wrap">${tools}<a class="btn small" href="#/print/letter/${i}">🖨 بطاقة المتابعة</a></div></div>${banner}
       <div class="card letter-head"><div class="row between"><h2>${esc(l.subject)}</h2><div class="row wrap">${l.priority === 'urgent' ? badge('عاجل', 'bad') : ''}${state}</div></div>
@@ -99,11 +99,11 @@
     const old = FU.list('letters', l => l.deletedAt && Date.now() - Date.parse(l.deletedAt) > TRASH_DAYS * 864e5); if (!old.length) return;
     for (const l of old) await destroyLetter(l); refresh();
   }
-  /* نقل المعاملة المنتهية إلى سجل المغلقة، وإعادتها منه */
+  /* إغلاق المعاملة المنتهية (تنتقل إلى سجل المغلقة)، وإعادة فتحها */
   A.closeLetter = async el => {
     const l = FU.byId('letters', el.dataset.id); if (!l || !FU.isOfficer() || l.deletedAt || l.closedAt) return;
-    if (FU.letterState(l) === 'open') throw new Error('ما زالت بعض الإحالات مفتوحة. أنهِها أولاً ثم انقل المعاملة.');
-    await FU.update('letters', l.id, c => { c.closedAt = FU.nowISO(); c.closedBy = me().id; }, 'letter_edit', { number: l.number, kind: 'نقل إلى السجل المغلق' }); FU.toast('نُقلت المعاملة إلى السجل المغلق', 'ok'); refresh();
+    if (FU.letterState(l) === 'open') throw new Error('ما زالت بعض الإحالات مفتوحة. أنهِها أولاً ثم أغلق المعاملة.');
+    await FU.update('letters', l.id, c => { c.closedAt = FU.nowISO(); c.closedBy = me().id; }, 'letter_edit', { number: l.number, kind: 'إغلاق المعاملة' }); FU.toast('أُغلقت المعاملة وانتقلت إلى سجل المعاملات المغلقة', 'ok'); refresh();
   };
   A.reopenLetter = async el => {
     const l = FU.byId('letters', el.dataset.id); if (!l || !FU.isOfficer() || l.deletedAt || !l.closedAt) return;
