@@ -137,8 +137,53 @@ const ok = (c, name) => { if (c) pass++; else { fails.push(name); console.log(' 
   await p.goto(base + '#/home'); await p.waitForSelector('.tiles'); ok((await text(p, '.tile >> nth=1')).startsWith('1'), 'overdue tile count');
   await p.goto(letterUrl); await p.waitForSelector('section.task'); await p.click('section.task >> nth=2 >> [data-act=delTask]'); await p.click('.modal-layer button[type=submit]'); await toast(p, /تم حذف الإحالة/);
   ok(await p.locator('section.task').count() === 2, 'assignment deleted');
-  await p.click('[data-act=delLetter]'); await p.click('.modal-layer button[type=submit]'); await p.waitForSelector('#reg-out');
-  ok(await p.evaluate(() => FU.db().letters.length === 1 && FU.db().tasks.length === 1 && FU.db().updates.length === 1 && Object.keys(FU.state.store.files).length === 0), 'letter delete cascades');
+  // البريد: رسالة الإحالة إلى ممثل الإدارة، وملف المسودة بالمرفق
+  await p.click('section.task >> nth=0 >> [data-act=mailTask]'); await p.waitForSelector('.modal-box');
+  ok((await p.inputValue('input[name=to]')) === 'aalqadhi@awqaf.gov.qa', 'mail: rep address prefilled');
+  ok((await p.inputValue('input[name=subject]')).startsWith('عاجل — إحالة كتاب رقم 1234'), 'mail: subject from template');
+  ok((await p.inputValue('textarea[name=body]')).includes('عناية: عبدالرحيم القاضي'), 'mail: body from template');
+  const [emlDl] = await Promise.all([p.waitForEvent('download'), p.click('[data-mail=eml]')]); const eml = fs.readFileSync(await emlDl.path(), 'latin1');
+  const part = eml.split(/\r\n\r\n/)[2].replace(/\r\n/g, '').replace(/------=_followup.*$/, '');
+  ok(/^To: aalqadhi@awqaf\.gov\.qa\r\nSubject: =\?UTF-8\?B\?/.test(eml) && eml.includes('\r\nX-Unsent: 1\r\n') && Buffer.from(part, 'base64').toString('utf8').includes('نحيل إليكم الكتاب المرفق') && eml.includes(Buffer.from('%PDF-1.4 test').toString('base64')) && /--\r\n$/.test(eml), 'mail: draft file has recipient, unsent flag, body and attachment');
+  ok(await p.evaluate(() => { const a = FU.mail.mailtoUrl(['a@b.qa', 'c@d.qa'], 'موضوع', 'سطر\nثانٍ'), b = FU.mail.mailtoUrl(['a@b.qa'], 'م', 'نص '.repeat(400)); return a.url.startsWith('mailto:a%40b.qa;c%40d.qa?subject=') && a.url.includes('%0D%0A') && !a.short && b.short && !b.url.includes('body='); }), 'mail: mailto link, long text falls back to copy');
+  await p.click('[data-mail=copy]'); await toast(p, /نُسخ الموضوع والنص/);
+  await p.click('.modal-box button[type=submit]'); await toast(p, /سُجّل إرسال الكتاب/);
+  await p.waitForFunction(() => document.querySelector('section.task').innerText.includes('أُرسل الكتاب بالبريد إلى عبدالرحيم القاضي')); ok(true, 'mail: sending logged in timeline');
+  // التذكيرات: تُرقَّم وتُعدّ ولا تُحسب إفادات
+  await p.click('section.task >> nth=0 >> [data-act=remindTask]'); await p.waitForSelector('.modal-box');
+  ok((await text(p, '.modal-box')).includes('التذكير رقم 1') && (await p.inputValue('input[name=subject]')).includes('استعجال (1): كتاب رقم 1234'), 'reminder 1 prepared (overdue → استعجال)');
+  await p.click('.modal-box button[type=submit]'); await toast(p, /سُجّل التذكير/); await p.waitForSelector('.modal-layer', { state: 'detached' });
+  await p.click('section.task >> nth=0 >> [data-act=remindTask]'); await p.waitForSelector('.modal-box'); ok((await text(p, '.modal-box')).includes('التذكير رقم 2'), 'reminder numbering');
+  await p.selectOption('select[name=via]', 'phone'); await p.fill('input[name=to]', ''); await p.click('.modal-box button[type=submit]'); await p.waitForSelector('.modal-layer', { state: 'detached' });
+  await p.waitForFunction(() => document.querySelector('section.task').innerText.includes('تذكير رقم 2'));
+  const t0 = await text(p, 'section.task >> nth=0'); ok(t0.includes('اتصال هاتفي') && t0.includes('3 إفادات دون إنجاز') && /التذكيرات\s*2/.test(t0) && /التذكيرات\s*2/.test(await text(p, '.letter-head')), 'reminders counted per referral and per letter, not as updates');
+  await p.goto(base + '#/register'); await p.waitForSelector('table.reg'); ok(await p.evaluate(() => [...document.querySelectorAll('table.reg thead th')].findIndex(th => th.textContent === 'التذكيرات') === 9 && FU.reminders(FU.db().tasks.find(t => t.deptId === 'dept-2')) === 2), 'register shows reminders column');
+  await p.goto(base + '#/mail-template'); await p.waitForSelector('.tiles'); ok(true, 'mail template page is admin-only');
+
+  // سجل المغلقة: لا تُنقل المعاملة وفيها إحالة مفتوحة، وتصير للعرض فقط بعد نقلها، وتعود بإعادة الفتح
+  await p.goto(base + '#/letter/' + other); await p.waitForSelector('section.task'); ok(await p.locator('[data-act=closeLetter]').count() === 0, 'cannot close with an open referral');
+  await p.click('[data-act=addUpdate]'); await p.selectOption('select[name=status]', 'done'); await p.fill('textarea[name=text]', 'تم'); await p.click('.modal-box button[type=submit]'); await toast(p, /تم الحفظ/);
+  await p.waitForSelector('.note.ok [data-act=closeLetter]'); await p.click('.note.ok [data-act=closeLetter]'); await toast(p, /نُقلت المعاملة إلى السجل المغلق/);
+  await p.waitForFunction(() => document.querySelector('main').innerText.includes('معاملة مغلقة منذ')); ok(await p.locator('[data-act=addUpdate],[data-act=editTask],[data-act=editLetter],[data-act=mailTask],[data-act=editUpdate]').count() === 0, 'closed letter is read-only');
+  await p.goto(base + '#/register'); await p.waitForSelector('table.reg'); ok((await text(p, '.subtabs')).includes('المعاملات المفتوحة (1)') && (await text(p, '.subtabs')).includes('المعاملات المغلقة (1)') && await p.locator('table.reg tbody tr').count() === 2, 'open register excludes closed');
+  await p.click('[data-b=closed]'); await p.waitForSelector('table.reg'); ok(await p.locator('table.reg tbody tr').count() === 1 && (await text(p, 'table.reg')).includes('كتاب ثانٍ'), 'closed register tab');
+  await p.click('[data-b=all]'); await p.waitForSelector('table.reg'); ok(await p.locator('table.reg tbody tr').count() === 3, 'all tab');
+  await p.goto(base + '#/home'); await p.waitForSelector('.tiles'); ok((await text(p, '.tile >> nth=5')).startsWith('1'), 'closed letters still count in statistics');
+  await p.goto(base + '#/letter/' + other); await p.waitForSelector('[data-act=reopenLetter]'); await p.click('[data-act=reopenLetter]'); await toast(p, /أُعيد فتح المعاملة/); await p.waitForSelector('[data-act=addUpdate]'); ok(true, 'reopen returns it to the open register');
+
+  // المحذوفة: الحذف نقل قابل للاسترجاع، يخرج من الأعداد، ثم حذف نهائي يزيل كل ما يتبع المعاملة
+  await p.goto(letterUrl); await p.waitForSelector('[data-act=delLetter]'); await p.click('[data-act=delLetter]'); await p.click('.modal-layer button[type=submit]'); await p.waitForSelector('#reg-out');
+  ok(await p.evaluate(() => FU.db().letters.length === 2 && FU.db().tasks.length === 3 && FU.myTasks().length === 1 && FU.registerQuery().length === 1), 'delete moves to trash, out of counts');
+  await p.click('[data-b=trash]'); await p.waitForSelector('[data-act=restoreLetter]'); ok((await text(p, '#reg-out')).includes('30 يوماً') && (await text(p, '#reg-out')).includes('متابعة الخطة الاستراتيجية'), 'trash lists deleted letter with days left');
+  await p.click('#reg-out a'); await p.waitForSelector('.note.warn'); ok((await text(p, 'main')).includes('هذه المعاملة محذوفة') && await p.locator('[data-act=addUpdate],[data-act=delLetter]').count() === 0, 'deleted letter page is read-only');
+  await p.click('[data-act=restoreLetter]'); await toast(p, /استُرجعت المعاملة/); await p.waitForSelector('[data-act=delLetter]'); ok(await p.evaluate(() => FU.myTasks().length === 3), 'restore brings it back');
+  await p.click('[data-act=delLetter]'); await p.click('.modal-layer button[type=submit]'); await p.waitForSelector('#reg-out'); await p.click('[data-b=trash]'); await p.click('[data-act=purgeLetter]'); await p.click('.modal-layer button[type=submit]'); await toast(p, /حُذفت المعاملة نهائياً/);
+  ok(await p.evaluate(id => FU.db().letters.length === 1 && FU.db().tasks.length === 1 && FU.db().updates.length > 0 && FU.db().updates.every(u => u.letterId === id) && Object.keys(FU.state.store.files).length === 0, other), 'permanent delete cascades');
+  await logout(p); await login(p, 'halmarzoogi', 'dg-pass1'); await p.waitForSelector('.tiles'); await p.goto(base + '#/register'); await p.waitForSelector('.subtabs'); ok(await p.locator('[data-b=trash]').count() === 0 && await p.locator('[data-b=closed]').count() === 1, 'viewer has no trash tab');
+  await logout(p); await login(p, 'aabakr', 'officer1'); await p.waitForSelector('.tiles');
+  // ما مضى على حذفه أكثر من 30 يوماً يُحذف نهائياً عند دخول مسؤول المتابعة
+  await p.evaluate(id => FU.update('letters', id, c => { c.deletedAt = new Date(Date.now() - 31 * 864e5).toISOString(); c.deletedBy = 'u-aabakr'; }, null), other);
+  await p.reload(); await p.waitForSelector('.tiles'); await p.waitForFunction(() => FU.db().letters.length === 0 && FU.db().tasks.length === 0 && FU.db().updates.length === 0, null, { timeout: 8000 }); ok(true, 'trash older than 30 days is purged');
   await ctx.close();
 
   /* ===== 2) وضع المجلد (OPFS بديلاً عن مجلد دروب بوكس) ===== */

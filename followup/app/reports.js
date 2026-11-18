@@ -22,25 +22,25 @@
 
   FU.route(/^#\/print\/letter\/([^/]+)$/, id => {
     const l = FU.byId('letters', id), ts = l ? FU.letterTasks(id).filter(FU.canSeeTask) : [];
-    if (!l || (FU.inDept() && !ts.length)) return FU.navigate('#/register');
+    if (!l || l.deletedAt || (FU.inDept() && !ts.length)) return FU.navigate('#/register');
     FU.printPage(`<div class="sheet">${head('بطاقة متابعة كتاب', 'رقم ' + l.number)}
       ${FU.meta([['م', esc(l.seq)], ['الموضوع', esc(l.subject)], ['رقم الكتاب', esc(l.number)], ['تاريخ الكتاب الوارد', fmtDate(l.date)], l.from ? ['الجهة الوارد منها', esc(l.from)] : null, ['الأولوية', l.priority === 'urgent' ? 'عاجل' : 'عادي']])}
       ${l.notes ? `<p><b>ملاحظات:</b> ${nl2br(l.notes)}</p>` : ''}
       ${ts.map(t => { const i = FU.taskInfo(t), ups = FU.taskUpdates(t.id); return `<div class="keep"><h2>${esc(FU.deptName(t.deptId))} ${statusBadge(t.status)} ${dueBadge(t, i)}</h2>
-        ${FU.meta([['تاريخ الإحالة', fmtDate(t.startDate)], ['المدة المتوقعة', t.days === '' || t.days == null ? '—' : FU.daysWord(+t.days)], ['تاريخ الاستحقاق', i.due ? fmtDate(i.due) : '—'], ['موظف المتابعة', t.followerId ? esc(FU.userName(t.followerId)) : '—'], t.status === 'done' ? ['تاريخ التنفيذ', fmtDate(t.doneDate)] : null])}</div>
-        ${ups.length ? `<table class="grid"><thead><tr><th>التاريخ</th><th>النوع</th><th>البيان</th><th>رقم كتاب الرد</th><th>بواسطة</th></tr></thead><tbody>${ups.map(u => `<tr><td class="c num">${fmtDate(u.date)}</td><td class="c">${esc(KIND[u.kind] || u.kind)}</td><td>${nl2br(u.text)}${u.status ? ` ${badge('← ' + (STATUS[u.status] || {}).t, 'gray')}` : ''}</td><td class="c">${esc(u.replyNo || '')}</td><td>${esc(u.byName || '')}</td></tr>`).join('')}</tbody></table>` : '<p class="muted">لا توجد إفادات بعد.</p>'}`; }).join('') || '<p class="muted">لم يُحَل هذا الكتاب إلى أي إدارة بعد.</p>'}${foot()}</div>`, { title: 'بطاقة متابعة — ' + l.number, orientation: 'portrait' });
+        ${FU.meta([['تاريخ الإحالة', fmtDate(t.startDate)], ['المدة المتوقعة', t.days === '' || t.days == null ? '—' : FU.daysWord(+t.days)], ['تاريخ الاستحقاق', i.due ? fmtDate(i.due) : '—'], ['موظف المتابعة', t.followerId ? esc(FU.userName(t.followerId)) : '—'], t.status === 'done' ? ['تاريخ التنفيذ', fmtDate(t.doneDate)] : null, ['التذكيرات', String(FU.reminders(t))]])}</div>
+        ${ups.length ? `<table class="grid"><thead><tr><th>التاريخ</th><th>النوع</th><th>البيان</th><th>رقم كتاب الرد</th><th>بواسطة</th></tr></thead><tbody>${ups.map(u => `<tr><td class="c num">${fmtDate(u.date)}</td><td class="c">${esc(u.kind === 'remind' && u.no ? 'تذكير رقم ' + u.no : KIND[u.kind] || u.kind)}</td><td>${nl2br(u.text || u.note || '')}${u.status ? ` ${badge('← ' + (STATUS[u.status] || {}).t, 'gray')}` : ''}</td><td class="c">${esc(u.replyNo || '')}</td><td>${esc(u.byName || '')}</td></tr>`).join('')}</tbody></table>` : '<p class="muted">لا توجد إفادات بعد.</p>'}`; }).join('') || '<p class="muted">لم يُحَل هذا الكتاب إلى أي إدارة بعد.</p>'}${foot()}</div>`, { title: 'بطاقة متابعة — ' + l.number, orientation: 'portrait' });
   });
 
   /* تصدير السجل بالتصفية الحالية: صف لكل تكليف بأعمدة ملف المتابعة السابق (ثلاث إفادات أولى) مع الاستحقاق وآخر إفادة */
   FU.actions.exportCsv = () => {
-    const rows = [['م', 'الموضوع', 'رقم الكتاب', 'تاريخ الكتاب الوارد', 'الجهة الوارد منها', 'جهة الاختصاص', 'حالة الإجراء', 'المدة المتوقعة للإنجاز بالأيام', 'تاريخ الاستحقاق', 'الأيام الباقية (السالب تأخر)', 'عدد الإفادات', 'الموظف المعني بالمتابعة', 'الإفادة الأولى', 'تاريخ الإفادة الأولى', 'الإفادة الثانية', 'تاريخ الإفادة الثانية', 'الإفادة الثالثة', 'تاريخ الإفادة الثالثة', 'آخر إفادة', 'تاريخ آخر إفادة', 'تاريخ التنفيذ', 'الملاحظات']];
+    const rows = [['م', 'الموضوع', 'رقم الكتاب', 'تاريخ الكتاب الوارد', 'الجهة الوارد منها', 'جهة الاختصاص', 'حالة الإجراء', 'المدة المتوقعة للإنجاز بالأيام', 'تاريخ الاستحقاق', 'الأيام الباقية (السالب تأخر)', 'عدد الإفادات', 'عدد التذكيرات', 'الموظف المعني بالمتابعة', 'الإفادة الأولى', 'تاريخ الإفادة الأولى', 'الإفادة الثانية', 'تاريخ الإفادة الثانية', 'الإفادة الثالثة', 'تاريخ الإفادة الثالثة', 'آخر إفادة', 'تاريخ آخر إفادة', 'تاريخ التنفيذ', 'الملاحظات']];
     for (const g of FU.registerQuery()) {
       const l = g.l, base = [Number(l.seq) || '', l.subject, String(l.number), l.date, l.from || ''];
-      if (!g.ts.length) { rows.push(base.concat(['', 'لم يُحَل بعد', '', '', '', '', '', '', '', '', '', '', '', '', '', '', l.notes || ''])); continue; }
+      if (!g.ts.length) { rows.push(base.concat(['', 'لم يُحَل بعد', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', l.notes || ''])); continue; }
       for (const t of g.ts) {
         const i = FU.taskInfo(t), ups = FU.taskUpdates(t.id).filter(u => u.text && (u.kind === 'action' || u.kind === 'follow')), three = [];
         for (let k = 0; k < 3; k++) three.push(ups[k] ? ups[k].text : '', ups[k] ? ups[k].date : '');
-        rows.push(base.concat([FU.deptName(t.deptId), (STATUS[t.status] || {}).t || t.status, t.days === '' || t.days == null ? '' : Number(t.days), i.due || '', i.left == null ? '' : i.left, i.n, t.followerId ? FU.userName(t.followerId) : ''], three, [i.last ? i.last.text : '', i.last ? i.last.date : '', t.doneDate || '', [l.notes, t.notes].filter(Boolean).join(' — ')]));
+        rows.push(base.concat([FU.deptName(t.deptId), (STATUS[t.status] || {}).t || t.status, t.days === '' || t.days == null ? '' : Number(t.days), i.due || '', i.left == null ? '' : i.left, i.n, FU.reminders(t), t.followerId ? FU.userName(t.followerId) : ''], three, [i.last ? i.last.text : '', i.last ? i.last.date : '', t.doneDate || '', [l.notes, t.notes].filter(Boolean).join(' — ')]));
       }
     }
     FU.download('سجل-المتابعة-' + FU.today() + '.csv', FU.csvText(rows), 'text/csv;charset=utf-8'); FU.toast('تم تنزيل الملف — يُفتح ببرنامج Excel', 'ok');
